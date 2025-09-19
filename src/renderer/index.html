@@ -88,13 +88,13 @@
                 <input type="text" id="job-name" placeholder="e.g., My Documents Backup" required />
             </div>
             <div class="form-group-row">
-                <label for="job-verify-content" class="setting-label"><i class="fa-solid fa-shield-halved"></i>Content Verification</label>
+                <label for="job-verify-content" class="setting-label"><i class="fa-solid fa-shield-halved"></i>Deep Verification</label>
                 <div class="form-group-control">
                     <label class="toggle-switch">
                         <input type="checkbox" id="job-verify-content">
                         <span class="slider"></span>
                     </label>
-                    <p class="setting-description">Verify files using content hashes (SHA-256). Slower, but extremely reliable. Recommended for critical data. If off, uses faster size/date check.</p>
+                    <p class="setting-description">Uses file size and a content signature (hash of the first 1MB). Much more reliable than the standard size/date check and safe for large files. Use this if modification times are unreliable.</p>
                 </div>
             </div>
           </div>

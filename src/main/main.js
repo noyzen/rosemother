@@ -361,20 +361,33 @@ async function getAllRelativeDirs(startPath, jobId) {
 function calculateOrphanFiles(sourcePaths, destIndex) {
     const toDelete = [];
     for (const destPath in destIndex) {
-        if (!sourcePaths.has(destPath)) {
+        if (!sourcePaths.has(destPath.toLowerCase())) {
             toDelete.push({ path: destPath, type: 'file' });
         }
     }
     return toDelete;
 }
 
-function calculateFileHash(filePath) {
+function calculatePartialFileHash(filePath, bytesToRead = 1024 * 1024) { // 1MB
     return new Promise((resolve, reject) => {
         const hash = crypto.createHash('sha256');
-        const stream = fsSync.createReadStream(filePath);
-        stream.on('data', data => hash.update(data));
-        stream.on('end', () => resolve(hash.digest('hex')));
-        stream.on('error', err => reject(err));
+        const stream = fsSync.createReadStream(filePath, { highWaterMark: 64 * 1024, end: bytesToRead - 1 });
+
+        stream.on('data', chunk => {
+            hash.update(chunk);
+        });
+
+        stream.on('end', () => {
+            resolve(hash.digest('hex'));
+        });
+
+        stream.on('error', err => {
+            if (err.code === 'ENOENT') {
+                resolve(null); // Return null if file doesn't exist, allows comparison logic to proceed
+            } else {
+                reject(err);
+            }
+        });
     });
 }
 
@@ -573,7 +586,7 @@ ipcMain.on('job:start', async (event, jobId) => {
                 }
 
                 const relativePath = path.join(relativeDir, dirent.name);
-                sourcePaths.add(relativePath);
+                sourcePaths.add(relativePath.toLowerCase());
                 
                 if (job.exclusions && isExcluded(relativePath, job.exclusions)) {
                     continue; // Skip excluded files and directories
@@ -596,19 +609,27 @@ ipcMain.on('job:start', async (event, jobId) => {
                         const destEntry = destIndex[relativePath];
 
                         let needsCopy = false;
+                        let sourceHash; // To be used if copy is needed
+
                         if (!destEntry) {
                             needsCopy = true;
                         } else if (sourceStats.size !== destEntry.size) {
                             needsCopy = true;
                         } else if (job.verifyContent) {
-                            // Content verification enabled: size matches, now check hash
+                            // Deep verification: size matches, check partial hash
                             sendUpdate('Copying', progress, `Verifying: ${relativePath}`, copyPayload);
-                            const sourceHash = await calculateFileHash(sourcePath);
-                            const destHash = destEntry.hash || await calculateFileHash(destPath);
+                            sourceHash = await calculatePartialFileHash(sourcePath);
+                            let destHash = destEntry.hash;
+                            if (!destHash) {
+                                try {
+                                    destHash = await calculatePartialFileHash(destPath);
+                                    destEntry.hash = destHash; // Cache it
+                                } catch (e) {
+                                    needsCopy = true;
+                                }
+                            }
                             if (sourceHash !== destHash) {
                                 needsCopy = true;
-                            } else if (!destEntry.hash) {
-                                destEntry.hash = destHash; // Cache the calculated hash
                             }
                         } else {
                             // Standard check: size matches, check modification time
@@ -624,12 +645,15 @@ ipcMain.on('job:start', async (event, jobId) => {
                             
                             await fs.mkdir(path.dirname(destPath), { recursive: true });
                             await fs.copyFile(sourcePath, destPath);
+                            const newDestStats = await fs.stat(destPath);
                             await fs.utimes(destPath, new Date(sourceStats.mtimeMs), new Date(sourceStats.mtimeMs));
                             
-                            destIndex[relativePath] = { size: sourceStats.size, mtimeMs: sourceStats.mtimeMs };
+                            destIndex[relativePath] = { size: newDestStats.size, mtimeMs: newDestStats.mtimeMs };
                             if (job.verifyContent) {
-                                // If we copied, we know the hash matches the source hash.
-                                destIndex[relativePath].hash = await calculateFileHash(sourcePath);
+                                if (!sourceHash) { // If copy was triggered by size/existence, hash wasn't calculated yet
+                                    sourceHash = await calculatePartialFileHash(sourcePath);
+                                }
+                                destIndex[relativePath].hash = sourceHash;
                             }
                             scheduleSave();
                         }
@@ -674,7 +698,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         const orphanFiles = calculateOrphanFiles(sourcePaths, destIndex);
         const allDestDirs = await getAllRelativeDirs(job.destination, jobId);
         const orphanDirs = allDestDirs
-            .filter(dir => !sourcePaths.has(dir))
+            .filter(dir => !sourcePaths.has(dir.toLowerCase()))
             .map(p => ({ path: p, type: 'dir' }));
             
         const toDelete = [...orphanFiles, ...orphanDirs];
@@ -735,7 +759,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         const orphanFiles = calculateOrphanFiles(sourcePaths, destIndex);
         const allDestDirs = await getAllRelativeDirs(job.destination, jobId).catch(() => []);
         const orphanDirs = allDestDirs
-            .filter(dir => !sourcePaths.has(dir))
+            .filter(dir => !sourcePaths.has(dir.toLowerCase()))
             .map(p => ({ path: p, type: 'dir' }));
         const toDelete = [...orphanFiles, ...orphanDirs];
         if (toDelete.length > 0) {

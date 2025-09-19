@@ -245,7 +245,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 <div class="job-footer">
                      <div class="job-details-indicator">
-                        ${job.verifyContent ? '<i class="fa-solid fa-check-double" title="Content verification enabled"></i>' : ''}
+                        ${job.verifyContent ? '<i class="fa-solid fa-check-double" title="Deep verification enabled"></i>' : ''}
                      </div>
                      <div class="job-status-container">
                         <div class="job-status">
