@@ -1,4 +1,5 @@
 
+
 const { app, BrowserWindow, Menu, ipcMain, dialog, powerSaveBlocker } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
@@ -218,12 +219,12 @@ async function performCleanup(job, files) {
         const dirsToDelete = files.filter(item => item.type === 'dir').map(item => item.path);
 
         for (const relativePath of filesToDelete) {
-            await fs.unlink(path.join(job.destination, relativePath)).catch(err => logToRenderer('ERROR', `Failed to delete file ${relativePath}: ${err.message}`));
+            await fs.rm(path.join(job.destination, relativePath), { force: true }).catch(err => logToRenderer('ERROR', `Failed to delete file ${relativePath}: ${err.message}`));
         }
 
         dirsToDelete.sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
         for (const relativePath of dirsToDelete) {
-            await fs.rmdir(path.join(job.destination, relativePath)).catch(err => logToRenderer('ERROR', `Failed to delete directory ${relativePath}: ${err.message}`));
+            await fs.rm(path.join(job.destination, relativePath), { recursive: true, force: true }).catch(err => logToRenderer('ERROR', `Failed to delete directory ${relativePath}: ${err.message}`));
         }
         logToRenderer('SUCCESS', `Cleanup for job ${job.id} completed.`);
         return { success: true };
@@ -242,6 +243,12 @@ ipcMain.on('job:start', async (event, jobId) => {
     const jobs = store.get('jobs', []);
     const job = jobs.find(j => j.id === jobId);
     if (!job) return;
+
+    const sendUpdate = (status, progress = 0, message = '', payload = {}) => {
+        if (mainWindow && mainWindow.webContents) {
+            mainWindow.webContents.send('job:update', { jobId, status, progress, message, payload });
+        }
+    };
 
     try {
         // Clear any persisted errors for this job from the previous run.
@@ -263,9 +270,6 @@ ipcMain.on('job:start', async (event, jobId) => {
         stopFlags.delete(jobId);
 
         logToRenderer('INFO', `Job ${jobId} started.`);
-        const sendUpdate = (status, progress = 0, message = '', payload = {}) => {
-            mainWindow.webContents.send('job:update', { jobId, status, progress, message, payload });
-        };
 
         try {
             await fs.access(job.source);

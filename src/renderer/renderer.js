@@ -721,7 +721,6 @@ document.addEventListener('DOMContentLoaded', () => {
     
     if (payload && payload.errorType === 'PATH_ERROR') {
       showConfirm('Job Error', message, 'info');
-      return;
     }
 
     const statusText = jobEl.querySelector('.status-text');
