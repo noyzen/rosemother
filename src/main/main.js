@@ -1,7 +1,6 @@
-const { app, BrowserWindow, Menu, nativeTheme, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
-const crypto = require('crypto');
 const WindowState = require('electron-window-state');
 const Store = require('electron-store');
 
