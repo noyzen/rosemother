@@ -227,7 +227,7 @@ document.addEventListener('DOMContentLoaded', () => {
           addLog('WARN', 'All persistent job errors have been cleared by the user.');
           renderErrorPanel();
           renderJobs();
-          setTimeout(() => errorsModal.classList.add('hidden'), 500);
+          errorsModal.classList.add('hidden');
       }
   });
 
@@ -249,8 +249,13 @@ document.addEventListener('DOMContentLoaded', () => {
               delete jobErrors[jobId];
               await window.electronAPI.setJobErrors(jobErrors);
               addLog('WARN', `Persistent errors for job "${job.name}" have been cleared.`);
-              renderErrorPanel(errorsSearchInput.value); // Re-render the panel
-              renderJobs(); // Re-render the main job list to hide the button
+              renderErrorPanel(errorsSearchInput.value);
+              renderJobs();
+
+              const hasAnyErrors = Object.values(jobErrors).some(arr => arr.length > 0);
+              if (!hasAnyErrors) {
+                  errorsModal.classList.add('hidden');
+              }
           }
       }
   });
@@ -357,7 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="job-status">
                             <span class="status-text">${idleMessage}</span>
                             <div class="status-details">
-                                <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${errorCount} error(s) stored` : ''}</span>
+                                <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${errorCount} error(s)` : ''}</span>
                                 <span class="status-count hidden"></span>
                                 <span class="status-eta hidden"></span>
                             </div>
@@ -946,11 +951,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const statusText = jobEl.querySelector('.status-text');
     const statusCount = jobEl.querySelector('.status-count');
     const statusEta = jobEl.querySelector('.status-eta');
-    const statusWarning = jobEl.querySelector('.status-warning');
     const progressBar = jobEl.querySelector('.progress-bar');
     const startStopBtn = jobEl.querySelector('.btn-start-stop');
     const cleanupBtn = jobEl.querySelector('.btn-cleanup');
-    const viewErrorsBtn = jobEl.querySelector('.btn-view-errors');
 
     // --- Real-time Error Handling ---
     if (payload) {
@@ -968,17 +971,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    const errorCount = (payload && typeof payload.errorCount !== 'undefined') 
-        ? payload.errorCount 
-        : (jobErrors[jobId] || []).length;
+    const errorCount = (jobErrors[jobId] || []).length;
     const hasErrors = errorCount > 0;
-
+    
+    const viewErrorsBtn = jobEl.querySelector('.btn-view-errors');
     viewErrorsBtn.classList.toggle('hidden', !hasErrors);
     if (hasErrors) {
         viewErrorsBtn.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Errors (${errorCount})`;
     }
 
-    statusWarning.textContent = hasErrors ? `${errorCount} error(s) stored` : '';
+    const statusWarning = jobEl.querySelector('.status-warning');
+    statusWarning.textContent = hasErrors ? `${errorCount} error(s)` : '';
     statusWarning.classList.toggle('hidden', !hasErrors);
 
     if (status === 'Done') {
