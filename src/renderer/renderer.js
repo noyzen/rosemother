@@ -307,13 +307,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (hasJobs) {
       jobs.forEach(job => {
         const hasPendingCleanup = pendingCleanups[job.id] && pendingCleanups[job.id].length > 0;
-        const hasPersistedErrors = jobErrors[job.id] && jobErrors[job.id].length > 0;
+        const errorCount = (jobErrors[job.id] || []).length;
+        const hasPersistedErrors = errorCount > 0;
         
         let idleMessage = 'Idle';
         if (hasPendingCleanup) {
             idleMessage = `${pendingCleanups[job.id].length} item(s) pending cleanup.`;
         } else if (hasPersistedErrors) {
-            idleMessage = `Last run finished with ${jobErrors[job.id].length} error(s)`;
+            idleMessage = `Last run finished with ${errorCount} error(s)`;
         }
         
         const jobEl = document.createElement('div');
@@ -356,7 +357,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="job-status">
                             <span class="status-text">${idleMessage}</span>
                             <div class="status-details">
-                                <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${jobErrors[job.id].length} error(s) stored` : ''}</span>
+                                <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${errorCount} error(s) stored` : ''}</span>
                                 <span class="status-count hidden"></span>
                                 <span class="status-eta hidden"></span>
                             </div>
@@ -366,7 +367,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                      </div>
                      <div class="job-actions">
-                        <button class="btn btn-sm btn-warning btn-view-errors ${hasPersistedErrors ? '' : 'hidden'}" title="View Errors"><i class="fa-solid fa-triangle-exclamation"></i> Errors</button>
+                        <button class="btn btn-sm btn-warning btn-view-errors ${hasPersistedErrors ? '' : 'hidden'}" title="View Errors"><i class="fa-solid fa-triangle-exclamation"></i> Errors${hasPersistedErrors ? ` (${errorCount})` : ''}</button>
                         <button class="btn btn-sm btn-warning btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" title="Cleanup Files"><i class="fa-solid fa-broom"></i> Cleanup</button>
                         <button class="btn btn-sm btn-primary btn-start-stop" title="Start Backup"><i class="fa-solid fa-play"></i> Start</button>
                         <div class="job-actions-divider"></div>
@@ -722,6 +723,13 @@ document.addEventListener('DOMContentLoaded', () => {
             button.setAttribute('title', 'Stopping...');
             window.electronAPI.stopJob(jobId);
         } else {
+            // Clear errors from previous run for this job
+            delete jobErrors[jobId];
+            jobItem.classList.remove('is-warning');
+            jobItem.querySelector('.btn-view-errors').classList.add('hidden');
+            jobItem.querySelector('.status-warning').classList.add('hidden');
+            jobItem.querySelector('.status-text').textContent = 'Starting...';
+
             runningJobs.add(jobId);
             updateHeaderActionsState();
 
@@ -943,8 +951,43 @@ document.addEventListener('DOMContentLoaded', () => {
     const startStopBtn = jobEl.querySelector('.btn-start-stop');
     const cleanupBtn = jobEl.querySelector('.btn-cleanup');
     const viewErrorsBtn = jobEl.querySelector('.btn-view-errors');
-    
-    // Check for 'Counting' status specifically for spinner display
+
+    // --- Real-time Error Handling ---
+    if (payload) {
+        // A single new error during the 'Copying' phase
+        if (payload.newError) {
+            if (!jobErrors[jobId]) jobErrors[jobId] = [];
+            jobErrors[jobId].push(payload.newError);
+            if (!errorsModal.classList.contains('hidden')) {
+                renderErrorPanel(errorsSearchInput.value);
+            }
+        }
+        // The final list of all errors at the end of a job
+        if (payload.copyErrors) {
+            jobErrors[jobId] = payload.copyErrors;
+        }
+    }
+
+    const errorCount = (payload && typeof payload.errorCount !== 'undefined') 
+        ? payload.errorCount 
+        : (jobErrors[jobId] || []).length;
+    const hasErrors = errorCount > 0;
+
+    viewErrorsBtn.classList.toggle('hidden', !hasErrors);
+    if (hasErrors) {
+        viewErrorsBtn.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Errors (${errorCount})`;
+    }
+
+    statusWarning.textContent = hasErrors ? `${errorCount} error(s) stored` : '';
+    statusWarning.classList.toggle('hidden', !hasErrors);
+
+    if (status === 'Done') {
+        jobEl.classList.remove('is-warning');
+    } else {
+        jobEl.classList.toggle('is-warning', hasErrors || status === 'DoneWithErrors');
+    }
+    // --- End Real-time Error Handling ---
+
     const isCounting = (status === 'Scanning' && progress < 0);
     if (isCounting) {
       const textNode = document.createTextNode(` ${message}`);
@@ -1017,17 +1060,6 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
         statusCount.classList.add('hidden');
     }
-    
-    if (payload && payload.copyErrors && payload.copyErrors.length > 0) {
-      const allJobErrors = jobErrors[jobId] || [];
-      jobErrors[jobId] = [...allJobErrors, ...payload.copyErrors];
-    }
-    
-    const hasPersistedErrors = jobErrors[jobId] && jobErrors[jobId].length > 0;
-    jobEl.classList.toggle('is-warning', hasPersistedErrors);
-    viewErrorsBtn.classList.toggle('hidden', !hasPersistedErrors);
-    statusWarning.textContent = hasPersistedErrors ? `${jobErrors[jobId].length} error(s) stored` : '';
-    statusWarning.classList.toggle('hidden', !hasPersistedErrors);
 
     jobEl.classList.toggle('is-error', status === 'Error');
     jobEl.classList.toggle('is-done', status === 'Done');
@@ -1054,7 +1086,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       setTimeout(() => {
         jobEl.classList.remove('is-error', 'is-done', 'is-scanning', 'is-copying', 'is-cleaning');
-        const hasCurrentErrors = jobErrors[jobId] && jobErrors[jobId].length > 0;
+        const hasCurrentErrors = (jobErrors[jobId] || []).length > 0;
         const hasPendingCleanup = pendingCleanups[jobId] && pendingCleanups[jobId].length > 0;
         
         if (hasPendingCleanup) {

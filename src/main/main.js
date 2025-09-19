@@ -290,6 +290,13 @@ ipcMain.on('job:start', async (event, jobId) => {
     const job = jobs.find(j => j.id === jobId);
     if (!job) return;
 
+    // Clear any errors from previous runs of this job.
+    const allErrorsStore = store.get('jobErrors', {});
+    if (allErrorsStore[jobId]) {
+        delete allErrorsStore[jobId];
+        store.set('jobErrors', allErrorsStore);
+    }
+
     const settings = store.get('settings', { loggingEnabled: true, preventSleep: false, autoCleanup: false });
     const sendUpdate = (status, progress, message, payload) => sendUpdateForJob(jobId, status, progress, message, payload);
 
@@ -457,7 +464,7 @@ ipcMain.on('job:start', async (event, jobId) => {
                 } else if (dirent.isFile()) {
                     processedFiles++;
                     const progress = totalSourceFiles > 0 ? (processedFiles / totalSourceFiles) * 100 : -1;
-                    const copyPayload = { processedFiles, totalSourceFiles };
+                    const copyPayload = { processedFiles, totalSourceFiles, errorCount: copyErrors.length };
                     
                     try {
                         sendUpdate('Copying', progress, `Checking: ${relativePath}`, copyPayload);
@@ -488,9 +495,16 @@ ipcMain.on('job:start', async (event, jobId) => {
                             scheduleSave();
                         }
                     } catch (error) {
+                        const newError = { path: relativePath, error: error.message };
+                        copyErrors.push(newError);
                         const errorMessage = `Failed to process: ${relativePath}. ${error.message}`;
-                        copyErrors.push({ path: relativePath, error: error.message });
                         logToRenderer('ERROR', `Job ${jobId}: ${errorMessage}`);
+                        sendUpdate('Copying', progress, `Error: ${relativePath}`, {
+                            processedFiles,
+                            totalSourceFiles,
+                            errorCount: copyErrors.length,
+                            newError: newError
+                        });
                     }
                 }
             }
@@ -507,8 +521,7 @@ ipcMain.on('job:start', async (event, jobId) => {
 
         if (copyErrors.length > 0) {
             const allErrors = store.get('jobErrors', {});
-            const existingErrors = allErrors[jobId] || [];
-            allErrors[jobId] = [...existingErrors, ...copyErrors];
+            allErrors[jobId] = copyErrors;
             store.set('jobErrors', allErrors);
         }
 
