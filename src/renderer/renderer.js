@@ -35,9 +35,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Job Errors Modal
   const errorsModal = document.getElementById('errors-modal');
+  const errorsModalTitle = document.getElementById('errors-modal-title');
+  const errorsModalJobId = document.getElementById('errors-modal-job-id');
   const errorsListContainer = document.getElementById('errors-list-container');
   const errorsSearchInput = document.getElementById('errors-search-input');
-  const clearErrorsBtn = document.getElementById('clear-errors-btn');
+  const clearCurrentJobErrorsBtn = document.getElementById('clear-current-job-errors-btn');
   const closeErrorsBtn = document.getElementById('close-errors-btn');
   
   // Settings Modal Elements
@@ -149,96 +151,66 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- End Logging System ---
 
   // --- Job Errors Panel ---
-  const renderErrorPanel = (filter = '') => {
+  const renderErrorPanel = (jobId, filter = '') => {
       const searchTerm = filter.toLowerCase();
-      let errorCount = 0;
-      let html = '';
+      const errors = jobErrors[jobId] || [];
+      
+      const filteredErrors = searchTerm
+          ? errors.filter(e => e.path.toLowerCase().includes(searchTerm) || e.error.toLowerCase().includes(searchTerm))
+          : errors;
 
-      const sortedJobs = [...jobs].sort((a, b) => a.name.localeCompare(b.name));
-
-      for (const job of sortedJobs) {
-          const errors = jobErrors[job.id];
-          if (!errors || errors.length === 0) continue;
-
-          const filteredErrors = searchTerm
-              ? errors.filter(e => e.path.toLowerCase().includes(searchTerm) || e.error.toLowerCase().includes(searchTerm) || job.name.toLowerCase().includes(searchTerm))
-              : errors;
-
-          if (filteredErrors.length > 0) {
-              errorCount += filteredErrors.length;
-              html += `<div class="error-job-group" data-job-id="${job.id}">
-                          <h3 class="error-job-title">
-                            <span>${job.name}</span>
-                            <button class="btn btn-sm btn-danger btn-clear-job-errors" title="Clear errors for this job">
-                                <i class="fa-solid fa-trash-can"></i> Clear These Errors
-                            </button>
-                          </h3>`;
-              
-              filteredErrors.forEach(error => {
-                  html += `<div class="error-entry">
-                              <div class="error-path">${error.path}</div>
-                              <div class="error-reason">${error.error}</div>
-                           </div>`;
-              });
-
-              html += `</div>`;
-          }
-      }
-
-      if (errorCount === 0) {
+      if (filteredErrors.length === 0) {
           errorsListContainer.innerHTML = `<div class="log-empty-state">No errors found${searchTerm ? ' matching your filter' : ''}.</div>`;
-      } else {
-          errorsListContainer.innerHTML = html;
+          return;
       }
+
+      const html = filteredErrors.map(error => {
+          return `<div class="error-entry">
+                      <div class="error-path">${error.path}</div>
+                      <div class="error-reason">${error.error}</div>
+                  </div>`;
+      }).join('');
+
+      errorsListContainer.innerHTML = html;
   };
 
-  const openErrorPanel = (filter = '') => {
-      errorsSearchInput.value = filter;
-      renderErrorPanel(filter);
+  const openErrorPanel = (jobId) => {
+      const job = jobs.find(j => j.id === jobId);
+      if (!job || !jobErrors[jobId]) return;
+
+      errorsModalTitle.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Errors for ${job.name}`;
+      errorsModalJobId.value = jobId;
+      errorsSearchInput.value = '';
+      renderErrorPanel(jobId, '');
       errorsModal.classList.remove('hidden');
   };
 
-  errorsSearchInput.addEventListener('input', () => renderErrorPanel(errorsSearchInput.value));
-  closeErrorsBtn.addEventListener('click', () => errorsModal.classList.add('hidden'));
-
-  clearErrorsBtn.addEventListener('click', async () => {
-      const confirmed = await showConfirm('Clear All Errors?', 'Are you sure you want to clear all persisted copy errors for all jobs? This action cannot be undone.', 'danger');
-      if (confirmed) {
-          jobErrors = {};
-          await window.electronAPI.setJobErrors({});
-          addLog('WARN', 'All persistent job errors have been cleared by the user.');
-          renderErrorPanel();
-          renderJobs();
-          errorsModal.classList.add('hidden');
-      }
+  errorsSearchInput.addEventListener('input', () => {
+    const jobId = errorsModalJobId.value;
+    if (jobId) {
+        renderErrorPanel(jobId, errorsSearchInput.value);
+    }
   });
 
-  errorsListContainer.addEventListener('click', async e => {
-      const clearButton = e.target.closest('.btn-clear-job-errors');
-      if (clearButton) {
-          const jobGroup = clearButton.closest('.error-job-group');
-          const jobId = jobGroup.dataset.jobId;
-          const job = jobs.find(j => j.id === jobId);
-          if (!job || !jobErrors[jobId]) return;
+  closeErrorsBtn.addEventListener('click', () => errorsModal.classList.add('hidden'));
 
-          const confirmed = await showConfirm(
-              `Clear errors for "${job.name}"?`,
-              `Are you sure you want to clear ${jobErrors[jobId].length} persisted copy error(s) for this job? This action cannot be undone.`,
-              'danger'
-          );
+  clearCurrentJobErrorsBtn.addEventListener('click', async () => {
+      const jobId = errorsModalJobId.value;
+      const job = jobs.find(j => j.id === jobId);
+      if (!job || !jobErrors[jobId]) return;
 
-          if (confirmed) {
-              delete jobErrors[jobId];
-              await window.electronAPI.setJobErrors(jobErrors);
-              addLog('WARN', `Persistent errors for job "${job.name}" have been cleared.`);
-              renderErrorPanel(errorsSearchInput.value);
-              renderJobs();
+      const confirmed = await showConfirm(
+          `Clear errors for "${job.name}"?`,
+          `Are you sure you want to clear ${jobErrors[jobId].length} persisted copy error(s) for this job? This action cannot be undone.`,
+          'danger'
+      );
 
-              const hasAnyErrors = Object.values(jobErrors).some(arr => arr.length > 0);
-              if (!hasAnyErrors) {
-                  errorsModal.classList.add('hidden');
-              }
-          }
+      if (confirmed) {
+          delete jobErrors[jobId];
+          await window.electronAPI.setJobErrors(jobErrors);
+          addLog('WARN', `Persistent errors for job "${job.name}" have been cleared.`);
+          renderJobs();
+          errorsModal.classList.add('hidden');
       }
   });
   // --- End Job Errors Panel ---
@@ -755,7 +727,7 @@ document.addEventListener('DOMContentLoaded', () => {
             window.electronAPI.startJob(jobId);
         }
     } else if (button.classList.contains('btn-view-errors')) {
-        openErrorPanel(job.name);
+        openErrorPanel(jobId);
     } else if (button.classList.contains('btn-edit')) {
         openJobModal(job);
     } else if (button.classList.contains('btn-delete')) {
@@ -987,8 +959,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (payload.newError) {
             if (!jobErrors[jobId]) jobErrors[jobId] = [];
             jobErrors[jobId].push(payload.newError);
-            if (!errorsModal.classList.contains('hidden')) {
-                renderErrorPanel(errorsSearchInput.value);
+            if (!errorsModal.classList.contains('hidden') && errorsModalJobId.value === jobId) {
+                renderErrorPanel(jobId, errorsSearchInput.value);
             }
         }
         // The final list of all errors at the end of a job

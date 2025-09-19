@@ -433,25 +433,6 @@ input[type="text"]:focus {
 
 /* Error Panel Specifics */
 #errors-list-container { font-family: var(--font-family); }
-.error-job-group {
-  margin-bottom: var(--spacing-lg);
-  background-color: var(--bg-tertiary);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--border-radius-md);
-  overflow: hidden;
-}
-.error-job-title {
-  margin: 0;
-  padding: var(--spacing-sm) var(--spacing-md);
-  border-bottom: 1px solid var(--border-primary);
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background-color: var(--bg-secondary);
-}
 .error-entry {
   padding: var(--spacing-sm) var(--spacing-md);
   border-bottom: 1px solid var(--border-primary);
@@ -459,7 +440,9 @@ input[type="text"]:focus {
   flex-direction: column;
   gap: var(--spacing-xs);
 }
-.error-entry:last-child { border-bottom: none; }
+#errors-list-container .error-entry:last-child {
+  border-bottom: none;
+}
 .error-entry:hover { background-color: rgba(255, 255, 255, 0.03); }
 .error-path { font-weight: 500; color: var(--text-secondary); font-size: 0.9rem; }
 .error-reason { color: var(--text-tertiary); font-style: italic; font-size: 0.8rem; padding-left: var(--spacing-sm); }

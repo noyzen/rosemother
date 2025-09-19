@@ -148,10 +148,11 @@
   <div id="errors-modal" class="modal-overlay hidden">
     <div class="modal-content modal-log-viewer">
       <div class="log-header">
-        <h2><i class="fa-solid fa-triangle-exclamation"></i> Job Copy Errors</h2>
+        <h2 id="errors-modal-title"><i class="fa-solid fa-triangle-exclamation"></i> Job Copy Errors</h2>
         <div class="log-controls">
+          <input type="hidden" id="errors-modal-job-id" />
           <input type="text" id="errors-search-input" placeholder="Filter by path or error reason..." />
-          <button id="clear-errors-btn" class="btn btn-danger"><i class="fa-solid fa-trash-can"></i> Clear All Errors</button>
+          <button id="clear-current-job-errors-btn" class="btn btn-danger"><i class="fa-solid fa-trash-can"></i> Clear These Errors</button>
           <button id="close-errors-btn" class="btn btn-secondary"><i class="fa-solid fa-times"></i></button>
         </div>
       </div>
