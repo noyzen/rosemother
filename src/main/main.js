@@ -167,6 +167,36 @@ async function calculateFileHash(filePath, jobId) {
     });
 }
 
+// Helper to count files iteratively to avoid stack overflows.
+async function countFiles(startPath, jobId) {
+    let fileCount = 0;
+    const queue = [startPath];
+
+    while (queue.length > 0) {
+        if (stopFlags.has(jobId)) {
+            throw new Error('COUNT_STOPPED');
+        }
+        const currentPath = queue.shift();
+        let dirents;
+        try {
+            dirents = await fs.readdir(currentPath, { withFileTypes: true });
+        } catch (e) {
+            // Ignore directories we can't read (e.g., permissions error)
+            continue;
+        }
+
+        for (const dirent of dirents) {
+            const fullPath = path.join(currentPath, dirent.name);
+            if (dirent.isDirectory()) {
+                queue.push(fullPath);
+            } else if (dirent.isFile()) {
+                fileCount++;
+            }
+        }
+    }
+    return fileCount;
+}
+
 // Backup Logic
 async function performCleanup(job, files) {
     if (!job || !files || files.length === 0) {
@@ -270,7 +300,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         const copyErrors = [];
         let needsIndexBuild = false;
 
-        sendUpdate('Copying', -1, 'Loading destination index...');
+        sendUpdate('Scanning', -1, 'Loading destination index...');
         try {
             const indexData = await fs.readFile(indexFilePath, 'utf-8');
             const parsedIndex = JSON.parse(indexData);
@@ -287,6 +317,29 @@ ipcMain.on('job:start', async (event, jobId) => {
 
         if (needsIndexBuild) {
             destIndex = {}; // Clear old data if rebuilding
+            
+            // Pre-scan to count files for progress reporting
+            sendUpdate('Scanning', 0, 'Counting destination files...');
+            let totalFileCount = 0;
+            try {
+                logToRenderer('INFO', `Job ${jobId}: Starting file count for destination at ${job.destination}.`);
+                totalFileCount = await countFiles(job.destination, jobId);
+                logToRenderer('INFO', `Job ${jobId}: Found approximately ${totalFileCount.toLocaleString()} files.`);
+            } catch (err) {
+                if (err.message === 'COUNT_STOPPED') {
+                    logToRenderer('WARN', `Job ${jobId} was stopped during destination file count.`);
+                    sendUpdate('Stopped', 0, 'Job stopped by user.');
+                    return;
+                }
+                logToRenderer('WARN', `Job ${jobId}: Could not completely count files. Progress will be indeterminate. Error: ${err.message}`);
+            }
+
+            if (stopFlags.has(jobId)) { // Re-check after async operation
+                logToRenderer('WARN', `Job ${jobId} was stopped by the user.`);
+                sendUpdate('Stopped', 0, 'Job stopped by user.');
+                return;
+            }
+
             let scannedFileCount = 0;
             async function buildFastIndex(relativeDir) {
                 if (stopFlags.has(jobId)) return;
@@ -302,7 +355,13 @@ ipcMain.on('job:start', async (event, jobId) => {
                         await buildFastIndex(relativePath);
                     } else if (dirent.isFile()) {
                         scannedFileCount++;
-                        sendUpdate('Copying', -1, `Scanning destination: ${scannedFileCount.toLocaleString()} files...`);
+                        
+                        const progress = totalFileCount > 0 ? Math.min((scannedFileCount / totalFileCount) * 100, 100) : -1;
+                        const message = totalFileCount > 0
+                            ? `Scanning: ${scannedFileCount.toLocaleString()} of ${totalFileCount.toLocaleString()}`
+                            : `Scanning destination: ${scannedFileCount.toLocaleString()} files...`;
+                        sendUpdate('Scanning', progress, message);
+
                         const fullPath = path.join(dir, dirent.name);
                         try {
                             const stats = await fs.stat(fullPath);
