@@ -170,6 +170,15 @@ input:checked + .slider:before { transform: translateX(20px); }
 .job-item.drag-over-bottom::after { bottom: -2px; }
 
 /* Status Indicators */
+.job-item.is-queued {
+  opacity: 0.7;
+  background-color: var(--bg-tertiary);
+}
+.job-item.is-queued:hover {
+  transform: none;
+  box-shadow: var(--shadow-sm);
+  border-color: var(--border-primary);
+}
 .job-item.is-warning { box-shadow: inset 4px 0 0 0 var(--accent-warning), var(--shadow-sm); }
 .job-item.is-error { box-shadow: inset 4px 0 0 0 var(--accent-danger), var(--shadow-sm); }
 .job-item.is-done { box-shadow: inset 4px 0 0 0 var(--accent-success), var(--shadow-sm); }

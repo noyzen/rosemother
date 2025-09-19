@@ -54,10 +54,13 @@ document.addEventListener('DOMContentLoaded', () => {
   let appSettings = { preventSleep: false, autoCleanup: false };
   let confirmCallback = null;
   let pendingCleanups = {};
-  let jobQueue = [];
-  let isBatchRunning = false;
   let jobErrors = {};
-  let runningJobs = new Set();
+
+  // --- New Centralized State Management ---
+  let activeJobId = null; // ID of the job currently running (backup or cleanup)
+  let activeJobStatus = null; // The detailed status of the active job
+  let jobQueue = []; // For "Start All"
+  let isBatchRunning = false;
   
   // Session-only state
   let shutdownOnCompletion = false;
@@ -127,42 +130,15 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   // --- End Job Errors Panel ---
 
-
-  const formatETA = (ms) => {
-    if (ms <= 0 || !isFinite(ms)) {
-      return '';
-    }
-    const seconds = Math.floor((ms / 1000) % 60);
-    const minutes = Math.floor((ms / (1000 * 60)) % 60);
-    const hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
-    const days = Math.floor(ms / (1000 * 60 * 60 * 24));
-
-    if (days > 0) return `~${days}d ${hours}h left`;
-    if (hours > 0) return `~${hours}h ${minutes}m left`;
-    if (minutes > 0) return `~${minutes}m ${seconds}s left`;
-    return `~${seconds}s left`;
-  };
-
   const updateHeaderActionsState = () => {
     const hasJobs = jobs.length > 0;
-    const isAnyJobRunning = runningJobs.size > 0;
+    const isOperationRunning = activeJobId !== null;
     
-    if (!hasJobs) {
-      startAllBtn.classList.add('hidden');
-      stopAllBtn.classList.add('hidden');
-      return;
-    }
+    startAllBtn.classList.toggle('hidden', !hasJobs || isOperationRunning);
+    stopAllBtn.classList.toggle('hidden', !isOperationRunning && !isBatchRunning);
 
-    startAllBtn.classList.toggle('hidden', isAnyJobRunning || isBatchRunning);
-    stopAllBtn.classList.toggle('hidden', !isAnyJobRunning);
-
-    if (!isAnyJobRunning) {
-      startAllBtn.disabled = false;
-      startAllBtn.innerHTML = '<i class="fa-solid fa-play-circle"></i> Start All';
-      
-      stopAllBtn.disabled = false;
-      stopAllBtn.innerHTML = '<i class="fa-solid fa-stop-circle"></i> Stop All';
-    }
+    startAllBtn.disabled = isOperationRunning;
+    stopAllBtn.disabled = !isOperationRunning && !isBatchRunning;
   };
 
   const renderJobs = () => {
@@ -172,42 +148,62 @@ document.addEventListener('DOMContentLoaded', () => {
     emptyStateEl.classList.toggle('hidden', jobs.length > 0);
 
     jobsListEl.innerHTML = '';
+    
+    const isAnyOperationActive = activeJobId !== null;
 
     if (hasJobs) {
       jobs.forEach(job => {
         const hasPendingCleanup = pendingCleanups[job.id] && pendingCleanups[job.id].length > 0;
         const errorCount = (jobErrors[job.id] || []).length;
         const hasPersistedErrors = errorCount > 0;
+        const isThisJobActive = job.id === activeJobId;
+        const isQueued = isBatchRunning && jobQueue.includes(job.id);
         
-        let idleMessage = 'Idle';
-        if (hasPendingCleanup) {
-            idleMessage = `${pendingCleanups[job.id].length} item(s) pending cleanup.`;
+        let statusText = 'Idle';
+        
+        // Handle transient status messages (e.g., after cleanup)
+        if (job.lastStatusUntil && job.lastStatusUntil > Date.now()) {
+            statusText = job.lastStatusMessage;
+        } else if (hasPendingCleanup) {
+            statusText = `${pendingCleanups[job.id].length} item(s) pending cleanup.`;
         } else if (hasPersistedErrors) {
-            idleMessage = `Last run finished with ${errorCount} error(s)`;
+            statusText = `Last run finished with ${errorCount} error(s)`;
+        }
+
+        if (isThisJobActive) {
+            statusText = activeJobStatus || 'Starting...';
+        } else if (isQueued) {
+            statusText = 'Queued...';
         }
         
         const jobEl = document.createElement('div');
         jobEl.className = 'job-item';
-        if (hasPersistedErrors) {
-            jobEl.classList.add('is-warning');
-        }
         jobEl.dataset.id = job.id;
-        jobEl.draggable = runningJobs.size === 0;
+        jobEl.draggable = !isAnyOperationActive;
 
-        const isJobEditable = !runningJobs.has(job.id) && !isBatchRunning;
+        if (isThisJobActive) jobEl.classList.add('is-running');
+        if (isQueued) jobEl.classList.add('is-queued');
+        if (hasPersistedErrors && !isThisJobActive) jobEl.classList.add('is-warning');
+        
+        // Handle transient status styling
+        if (job.lastStatusUntil && job.lastStatusUntil > Date.now()) {
+             jobEl.classList.add(job.lastStatusMessage.includes('fail') ? 'is-error' : 'is-done');
+        }
 
         jobEl.innerHTML = `
-            <div class="job-drag-handle" title="Drag to reorder"><i class="fa-solid fa-grip-vertical"></i></div>
+            <div class="job-drag-handle" title="${isAnyOperationActive ? 'Cannot reorder while a job is running' : 'Drag to reorder'}"><i class="fa-solid fa-grip-vertical"></i></div>
             <div class="job-content">
                 <div class="job-header">
                     <h3 class="job-name">${job.name || 'Untitled Job'}</h3>
                     <div class="job-actions">
-                        <button class="btn btn-sm btn-warning btn-view-errors ${hasPersistedErrors ? '' : 'hidden'}" title="View Errors"><i class="fa-solid fa-triangle-exclamation"></i> Errors${hasPersistedErrors ? ` (${errorCount})` : ''}</button>
-                        <button class="btn btn-sm btn-warning btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" title="Cleanup Files"><i class="fa-solid fa-broom"></i> Cleanup</button>
-                        <button class="btn btn-sm btn-primary btn-start-stop" title="${isBatchRunning ? 'Batch run in progress' : 'Start Backup'}" ${isBatchRunning ? 'disabled' : ''}><i class="fa-solid fa-play"></i> Start</button>
+                        <button class="btn btn-sm btn-warning btn-view-errors ${hasPersistedErrors && !isThisJobActive ? '' : 'hidden'}" title="View Errors"><i class="fa-solid fa-triangle-exclamation"></i> Errors${hasPersistedErrors ? ` (${errorCount})` : ''}</button>
+                        <button class="btn btn-sm btn-warning btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" title="Cleanup Files" ${isAnyOperationActive ? 'disabled' : ''}><i class="fa-solid fa-broom"></i> Cleanup</button>
+                        <button class="btn btn-sm ${isThisJobActive ? 'btn-danger is-stop' : 'btn-primary'} btn-start-stop" title="${isThisJobActive ? 'Stop Backup' : 'Start Backup'}" ${isAnyOperationActive && !isThisJobActive ? 'disabled' : ''}>
+                            <i class="fa-solid ${isThisJobActive ? 'fa-stop' : 'fa-play'}"></i> ${isThisJobActive ? 'Stop' : 'Start'}
+                        </button>
                         <div class="job-actions-divider"></div>
-                        <button class="btn btn-sm btn-secondary btn-edit" title="Edit Job" ${!isJobEditable ? 'disabled' : ''}><i class="fa-solid fa-pencil"></i> Edit</button>
-                        <button class="btn btn-sm btn-secondary btn-delete" title="Delete Job" ${!isJobEditable ? 'disabled' : ''}><i class="fa-solid fa-trash-can"></i> Delete</button>
+                        <button class="btn btn-sm btn-secondary btn-edit" title="Edit Job" ${isAnyOperationActive ? 'disabled' : ''}><i class="fa-solid fa-pencil"></i> Edit</button>
+                        <button class="btn btn-sm btn-secondary btn-delete" title="Delete Job" ${isAnyOperationActive ? 'disabled' : ''}><i class="fa-solid fa-trash-can"></i> Delete</button>
                     </div>
                 </div>
 
@@ -234,15 +230,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="job-footer">
                      <div class="job-status-container">
                         <div class="job-status">
-                            <span class="status-text">${idleMessage}</span>
+                            <span class="status-text">${statusText}</span>
                             <div class="status-details">
-                                <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${errorCount} error(s)` : ''}</span>
+                                <span class="status-warning hidden"></span>
                                 <span class="status-count hidden"></span>
                                 <span class="status-eta hidden"></span>
                             </div>
                         </div>
                         <div class="progress-bar-container">
-                            <div class="progress-bar"></div>
+                            <div class="progress-bar" style="width: 0%;"></div>
                         </div>
                      </div>
                 </div>
@@ -495,14 +491,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Drag and Drop Logic ---
   let draggedId = null;
 
-  const updateJobsDraggableState = () => {
-    const canDrag = runningJobs.size === 0;
-    document.querySelectorAll('.job-item').forEach(el => {
-        el.draggable = canDrag;
-    });
-  };
-
   jobsListEl.addEventListener('dragstart', e => {
+    if (activeJobId !== null) {
+      e.preventDefault();
+      return;
+    }
     const target = e.target.closest('.job-item');
     if (target) {
         draggedId = target.dataset.id;
@@ -575,45 +568,24 @@ document.addEventListener('DOMContentLoaded', () => {
   
   jobsListEl.addEventListener('click', async e => {
     const button = e.target.closest('button');
-    if (!button) return;
+    if (!button || button.disabled) return;
 
     const jobItem = e.target.closest('.job-item');
     const jobId = jobItem.dataset.id;
     const job = jobs.find(j => j.id === jobId);
     
     if (button.classList.contains('btn-start-stop')) {
-        if (runningJobs.has(jobId)) {
-            // Prevent multiple clicks while waiting for stop confirmation
-            if (jobItem.classList.contains('is-stopping')) return;
-
-            jobItem.classList.add('is-stopping');
-            button.disabled = true;
-            button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Stopping...';
-            button.setAttribute('title', 'Stopping...');
+        if (activeJobId === jobId) { // It's a stop button
             window.electronAPI.stopJob(jobId);
-        } else {
-            // Clear errors and pending cleanups from previous run for this job
+            activeJobStatus = 'Stopping...';
+            renderJobs();
+        } else if (activeJobId === null) { // It's a start button and nothing else is running
+            activeJobId = jobId;
+            activeJobStatus = 'Starting...';
             delete jobErrors[jobId];
             delete pendingCleanups[jobId];
-            
-            if (runningJobs.size === 0) {
-              updateJobsDraggableState(); // Disable dragging as soon as the first job starts
-            }
-            runningJobs.add(jobId);
-
-            jobItem.querySelector('.btn-cleanup').classList.add('hidden');
-            jobItem.classList.remove('is-warning');
-            jobItem.querySelector('.btn-view-errors').classList.add('hidden');
-            jobItem.querySelector('.status-warning').classList.add('hidden');
-            jobItem.querySelector('.status-text').textContent = 'Starting...';
-
-            updateHeaderActionsState();
-
-            button.disabled = true;
-            button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Starting...';
-            jobItem.classList.add('is-running'); // Optimistic UI update
-
             window.electronAPI.startJob(jobId);
+            renderJobs();
         }
     } else if (button.classList.contains('btn-view-errors')) {
         openErrorPanel(jobId);
@@ -629,6 +601,7 @@ document.addEventListener('DOMContentLoaded', () => {
             saveJobs();
         }
     } else if (button.classList.contains('btn-cleanup')) {
+        if (activeJobId !== null) return;
         const filesToClean = pendingCleanups[jobId] || [];
         const confirmed = await showConfirm(
             'Confirm Cleanup',
@@ -637,9 +610,10 @@ document.addEventListener('DOMContentLoaded', () => {
             filesToClean
         );
         if (confirmed) {
+            activeJobId = jobId;
+            activeJobStatus = 'Preparing to clean...';
             window.electronAPI.cleanupJob({ jobId, files: filesToClean });
-            jobItem.querySelector('.status-text').textContent = 'Cleaning up...';
-            button.disabled = true;
+            renderJobs();
         }
     }
   });
@@ -680,51 +654,50 @@ document.addEventListener('DOMContentLoaded', () => {
         if (shutdownOnCompletion) {
             initiateShutdown();
         }
-        renderJobs(); // Re-render to re-enable controls
+        renderJobs();
         return;
     }
     const jobId = jobQueue.shift();
+    activeJobId = jobId;
+    activeJobStatus = 'Starting...';
+    
+    delete jobErrors[jobId];
+    delete pendingCleanups[jobId];
+    
+    renderJobs();
     window.electronAPI.startJob(jobId);
   };
 
   startAllBtn.addEventListener('click', () => {
-    if (runningJobs.size > 0 || isBatchRunning) return;
+    if (activeJobId !== null || isBatchRunning) return;
     isBatchRunning = true;
     jobQueue = jobs.map(j => j.id);
-    renderJobs(); // Re-render to disable controls
     processJobQueue();
   });
   
   stopAllBtn.addEventListener('click', async () => {
-    if (runningJobs.size === 0) return;
-    
-    const confirmed = await showConfirm(
-        'Stop All Jobs?',
-        `Are you sure you want to request a stop for all ${runningJobs.size} running job(s)?`,
-        'danger'
-    );
+    if (activeJobId === null && !isBatchRunning) return;
+
+    const confirmMessage = isBatchRunning
+        ? `Are you sure you want to stop the current job and clear the queue of ${jobQueue.length} upcoming job(s)?`
+        : 'Are you sure you want to stop the currently running job?';
+
+    const confirmed = await showConfirm('Stop Operation?', confirmMessage, 'danger');
 
     if (confirmed) {
-      if (isBatchRunning) {
-          jobQueue = [];
-      }
+        jobQueue = [];
+        const wasBatchRunning = isBatchRunning;
+        isBatchRunning = false;
 
-      stopAllBtn.disabled = true;
-      stopAllBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Stopping All';
-      
-      runningJobs.forEach(jobId => {
-        window.electronAPI.stopJob(jobId);
-        const jobEl = document.querySelector(`.job-item[data-id="${jobId}"]`);
-        if (jobEl && !jobEl.classList.contains('is-stopping')) {
-            jobEl.classList.add('is-stopping');
-            const startStopBtn = jobEl.querySelector('.btn-start-stop');
-            if (startStopBtn) {
-                startStopBtn.disabled = true;
-                startStopBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Stopping...';
-                startStopBtn.setAttribute('title', 'Stopping...');
-            }
+        if (activeJobId) {
+            window.electronAPI.stopJob(activeJobId);
+            activeJobStatus = 'Stopping...';
         }
-      });
+        
+        // If only a batch was queued but not started, we need to manually re-render
+        if (wasBatchRunning) {
+            renderJobs();
+        }
     }
   });
 
@@ -807,80 +780,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.electronAPI.onJobUpdate(data => {
     const { jobId, status, progress, message, payload } = data;
+    if (jobId !== activeJobId) return;
+
     const jobEl = document.querySelector(`.job-item[data-id="${jobId}"]`);
     if (!jobEl) return;
 
+    activeJobStatus = message || status;
+    
+    // --- Update UI elements for the active job ---
     const statusText = jobEl.querySelector('.status-text');
     const statusCount = jobEl.querySelector('.status-count');
     const statusEta = jobEl.querySelector('.status-eta');
     const progressBar = jobEl.querySelector('.progress-bar');
-    const cleanupBtn = jobEl.querySelector('.btn-cleanup');
-    const startStopBtn = jobEl.querySelector('.btn-start-stop');
-    const editDeleteBtns = jobEl.querySelectorAll('.btn-edit, .btn-delete');
     
+    statusText.textContent = activeJobStatus;
+
     const isFinalState = ['Error', 'Done', 'DoneWithErrors', 'Stopped'].includes(status);
-
-    // --- Real-time Error Handling ---
-    if (payload) {
-        if (payload.newError) {
-            if (!jobErrors[jobId]) jobErrors[jobId] = [];
-            jobErrors[jobId].push(payload.newError);
-            if (!errorsModal.classList.contains('hidden') && errorsModalJobId.value === jobId) {
-                renderErrorPanel(jobId, errorsSearchInput.value);
-            }
-        }
-        if (payload.copyErrors) {
-            jobErrors[jobId] = payload.copyErrors;
-        }
-    }
-
-    const errorCount = (jobErrors[jobId] || []).length;
-    const hasErrors = errorCount > 0;
     
-    const viewErrorsBtn = jobEl.querySelector('.btn-view-errors');
-    viewErrorsBtn.classList.toggle('hidden', !hasErrors);
-    if (hasErrors) {
-        viewErrorsBtn.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Errors (${errorCount})`;
-    }
-
-    const statusWarning = jobEl.querySelector('.status-warning');
-    statusWarning.textContent = hasErrors ? `${errorCount} error(s)` : '';
-    statusWarning.classList.toggle('hidden', !hasErrors);
-
-    jobEl.classList.toggle('is-warning', hasErrors || status === 'DoneWithErrors' || status === 'Cleaning');
-    if (status === 'Done') jobEl.classList.remove('is-warning');
-    // --- End Real-time Error Handling ---
-
-    // --- Pending Cleanup Handling ---
     if (isFinalState) {
-        const files = payload?.filesToDelete;
-        if (files && files.length > 0) {
-            const showCleanupButton = !appSettings.autoCleanup || status !== 'Done';
-            if (showCleanupButton) {
-                pendingCleanups[jobId] = files;
-                cleanupBtn.classList.remove('hidden');
-            } else {
-                delete pendingCleanups[jobId];
-                cleanupBtn.classList.add('hidden');
-            }
-        } else {
-            delete pendingCleanups[jobId];
-            cleanupBtn.classList.add('hidden');
-        }
+      if (payload?.filesToDelete?.length > 0) {
+          const showCleanupButton = !appSettings.autoCleanup || status !== 'Done';
+          if (showCleanupButton) {
+              pendingCleanups[jobId] = payload.filesToDelete;
+          }
+      }
+      if (payload?.copyErrors) {
+          jobErrors[jobId] = payload.copyErrors;
+      }
     }
 
-    const isCounting = (status === 'Scanning' && progress < 0);
-    if (isCounting) {
-      const textNode = document.createTextNode(` ${message}`);
-      const icon = document.createElement('i');
-      icon.className = 'fa-solid fa-spinner fa-spin status-spinner';
-      statusText.innerHTML = '';
-      statusText.appendChild(icon);
-      statusText.appendChild(textNode);
-    } else {
-      statusText.textContent = message || status;
-    }
-    
     if (progress < 0) {
       progressBar.style.width = '100%';
       progressBar.classList.add('indeterminate');
@@ -888,114 +816,59 @@ document.addEventListener('DOMContentLoaded', () => {
       progressBar.classList.remove('indeterminate');
       progressBar.style.width = `${progress}%`;
     }
-    
-    // Reset phase classes for progress bar color
-    jobEl.classList.remove('is-scanning', 'is-copying', 'is-cleaning');
+
+    jobEl.classList.remove('is-scanning', 'is-copying', 'is-cleaning', 'is-done', 'is-error', 'is-warning');
     if (status === 'Scanning') jobEl.classList.add('is-scanning');
     if (status === 'Copying') jobEl.classList.add('is-copying');
     if (status === 'Cleaning') jobEl.classList.add('is-cleaning');
+    if (status === 'Done') jobEl.classList.add('is-done');
+    if (['Error', 'DoneWithErrors'].includes(status)) jobEl.classList.add('is-error');
 
-    // --- Robust State & Button Management ---
-    const isJobRunning = ['Scanning', 'Copying', 'Cleaning'].includes(status);
-    jobEl.classList.toggle('is-running', isJobRunning);
-    
-    if (isFinalState) {
-        runningJobs.delete(jobId);
-        jobEl.classList.remove('is-stopping');
-        if (runningJobs.size === 0) {
-            updateJobsDraggableState();
-        }
-    }
-    
-    const isJobStopping = jobEl.classList.contains('is-stopping');
-    const isBusy = isJobRunning || isJobStopping;
-
-    // Update button enabled/disabled states
-    startStopBtn.disabled = isJobStopping || (isBatchRunning && !isJobRunning);
-    editDeleteBtns.forEach(b => b.disabled = isBusy || isBatchRunning);
-    cleanupBtn.disabled = isBusy;
-    
-    // Update Start/Stop button appearance
-    if (isJobStopping) {
-        // UI is already "Stopping...", set by the click handler. Do nothing.
-    } else if (isJobRunning) {
-        startStopBtn.innerHTML = '<i class="fa-solid fa-stop"></i> Stop';
-        startStopBtn.setAttribute('title', 'Stop Backup');
-        startStopBtn.classList.add('is-stop', 'btn-danger');
-        startStopBtn.classList.remove('btn-primary');
-    } else { // Idle, Stopped, Done, Error
-        startStopBtn.innerHTML = '<i class="fa-solid fa-play"></i> Start';
-        startStopBtn.setAttribute('title', 'Start Backup');
-        startStopBtn.classList.remove('is-stop', 'btn-danger');
-        startStopBtn.classList.add('btn-primary');
-    }
-    // --- End State Management ---
-
-    if (status === 'Copying' && payload && payload.eta > 0) {
-        statusEta.textContent = formatETA(payload.eta);
-        statusEta.classList.remove('hidden');
-    } else {
-        statusEta.classList.add('hidden');
-    }
-    
-    if (status === 'Copying' && payload && payload.processedFiles && payload.totalSourceFiles > 0) {
+    if (status === 'Copying' && payload && payload.totalSourceFiles > 0) {
         statusCount.textContent = `${payload.processedFiles.toLocaleString()} of ${payload.totalSourceFiles.toLocaleString()}`;
         statusCount.classList.remove('hidden');
     } else {
         statusCount.classList.add('hidden');
     }
-
-    jobEl.classList.toggle('is-error', status === 'Error');
-    jobEl.classList.toggle('is-done', status === 'Done');
-
+    
+    // --- State Transition Logic ---
     if (isFinalState) {
-      if (isBatchRunning) {
-        setTimeout(processJobQueue, 500);
-      }
-      setTimeout(() => {
-        jobEl.classList.remove('is-error', 'is-done', 'is-scanning', 'is-copying', 'is-cleaning');
-        const hasCurrentErrors = (jobErrors[jobId] || []).length > 0;
-        const hasPendingCleanup = pendingCleanups[jobId] && pendingCleanups[jobId].length > 0;
-        
-        if (hasPendingCleanup) {
-            statusText.textContent = `${pendingCleanups[jobId].length} item(s) pending cleanup.`;
-        } else if (hasCurrentErrors) {
-            statusText.textContent = `Last run finished with ${jobErrors[jobId].length} error(s)`;
-            jobEl.classList.add('is-warning');
+        activeJobId = null;
+        activeJobStatus = null;
+        if (isBatchRunning) {
+            setTimeout(processJobQueue, 500);
         } else {
-            statusText.textContent = 'Idle';
-            progressBar.style.width = '0%';
+            // Set a transient status for the completed job
+            const job = jobs.find(j => j.id === jobId);
+            if (job) {
+                job.lastStatusMessage = message;
+                job.lastStatusUntil = Date.now() + 8000;
+            }
+            // Re-render to unlock UI
+            setTimeout(renderJobs, 500); 
         }
-
-      }, 8000);
+    } else {
+        renderJobs(); // Re-render to update things like error counts in real-time
     }
-
-    updateHeaderActionsState();
   });
   
-  window.electronAPI.onCleanupComplete(({ jobId, success }) => {
-     const jobEl = document.querySelector(`.job-item[data-id="${jobId}"]`);
-     if (jobEl) {
-        delete pendingCleanups[jobId];
-        
-        const statusText = jobEl.querySelector('.status-text');
-        const cleanupBtn = jobEl.querySelector('.btn-cleanup');
-        
-        cleanupBtn.classList.add('hidden');
-        cleanupBtn.disabled = false;
-        
-        if(success) {
-            statusText.textContent = 'Cleanup complete.';
-            jobEl.classList.add('is-done');
-        } else {
-            statusText.textContent = 'Cleanup failed.';
-            jobEl.classList.add('is-error');
-        }
+  window.electronAPI.onCleanupComplete(({ jobId, success, error }) => {
+     if (jobId !== activeJobId) return;
+     
+     activeJobId = null;
+     activeJobStatus = null;
+     delete pendingCleanups[jobId];
+     
+     const job = jobs.find(j => j.id === jobId);
+     if(job) {
+        job.lastStatusMessage = success ? 'Cleanup complete.' : `Cleanup failed: ${error}`;
+        job.lastStatusUntil = Date.now() + 8000;
+     }
 
-        setTimeout(() => {
-             jobEl.classList.remove('is-error', 'is-done');
-             statusText.textContent = 'Idle';
-        }, 5000);
+     if (isBatchRunning) {
+        processJobQueue();
+     } else {
+        renderJobs();
      }
   });
 
@@ -1004,7 +877,6 @@ document.addEventListener('DOMContentLoaded', () => {
     jobs = await window.electronAPI.getJobs();
     jobErrors = await window.electronAPI.getJobErrors();
     renderJobs();
-    updateJobsDraggableState();
   }
 
   initializeApp();
