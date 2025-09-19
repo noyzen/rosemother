@@ -2,6 +2,8 @@
 
 
 
+
+
 const { app, BrowserWindow, Menu, ipcMain, dialog, powerSaveBlocker } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
@@ -307,9 +309,8 @@ ipcMain.on('job:start', async (event, jobId) => {
     };
 
     try {
-        const allErrors = store.get('jobErrors', {});
-        delete allErrors[jobId];
-        store.set('jobErrors', allErrors);
+        // Errors are now persistent and only cleared by the user.
+        // This section used to clear errors, but has been removed.
 
         if (runningJobsInMain.size === 0) {
             if (settings.preventSleep) {
@@ -489,7 +490,9 @@ ipcMain.on('job:start', async (event, jobId) => {
 
         if (copyErrors.length > 0) {
             const allErrors = store.get('jobErrors', {});
-            allErrors[jobId] = copyErrors;
+            // Append new errors to existing ones for this job
+            const existingErrors = allErrors[jobId] || [];
+            allErrors[jobId] = [...existingErrors, ...copyErrors];
             store.set('jobErrors', allErrors);
         }
 

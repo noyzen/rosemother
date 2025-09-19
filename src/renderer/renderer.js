@@ -19,8 +19,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const destPathInput = document.getElementById('dest-path');
   const jobExclusionsEnabledToggle = document.getElementById('job-exclusions-enabled');
   const exclusionsContainer = document.getElementById('exclusions-container');
-  const excludedPathsContainer = document.getElementById('job-excluded-paths');
-  const excludedExtensionsPathContainer = document.getElementById('job-excluded-extensions');
+  const excludedPathsList = document.getElementById('excluded-paths-list');
+  const excludedExtensionsPathList = document.getElementById('excluded-extensions-list');
   
   const confirmModal = document.getElementById('confirm-modal');
   const confirmTitle = document.getElementById('confirm-title');
@@ -32,6 +32,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const logSearchInput = document.getElementById('log-search-input');
   const loggingEnabledToggle = document.getElementById('logging-enabled-toggle');
   const refreshLogBtn = document.getElementById('refresh-log-btn');
+
+  // Job Errors Modal
+  const errorsModal = document.getElementById('errors-modal');
+  const errorsListContainer = document.getElementById('errors-list-container');
+  const errorsSearchInput = document.getElementById('errors-search-input');
+  const clearErrorsBtn = document.getElementById('clear-errors-btn');
+  const closeErrorsBtn = document.getElementById('close-errors-btn');
   
   // Settings Modal Elements
   const settingsModal = document.getElementById('settings-modal');
@@ -158,6 +165,68 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   // --- End Logging System ---
 
+  // --- Job Errors Panel ---
+  const renderErrorPanel = (filter = '') => {
+      const searchTerm = filter.toLowerCase();
+      let errorCount = 0;
+      let html = '';
+
+      const sortedJobs = [...jobs].sort((a, b) => a.name.localeCompare(b.name));
+
+      for (const job of sortedJobs) {
+          const errors = jobErrors[job.id];
+          if (!errors || errors.length === 0) continue;
+
+          const filteredErrors = searchTerm
+              ? errors.filter(e => e.path.toLowerCase().includes(searchTerm) || e.error.toLowerCase().includes(searchTerm) || job.name.toLowerCase().includes(searchTerm))
+              : errors;
+
+          if (filteredErrors.length > 0) {
+              errorCount += filteredErrors.length;
+              html += `<div class="error-job-group">
+                          <h3 class="error-job-title">${job.name}</h3>`;
+              
+              filteredErrors.forEach(error => {
+                  html += `<div class="error-entry">
+                              <div class="error-path">${error.path}</div>
+                              <div class="error-reason">${error.error}</div>
+                           </div>`;
+              });
+
+              html += `</div>`;
+          }
+      }
+
+      if (errorCount === 0) {
+          errorsListContainer.innerHTML = `<div class="log-empty-state">No errors found${searchTerm ? ' matching your filter' : ''}.</div>`;
+      } else {
+          errorsListContainer.innerHTML = html;
+      }
+  };
+
+  const openErrorPanel = (filter = '') => {
+      errorsSearchInput.value = filter;
+      renderErrorPanel(filter);
+      errorsModal.classList.remove('hidden');
+  };
+
+  errorsSearchInput.addEventListener('input', () => renderErrorPanel(errorsSearchInput.value));
+  closeErrorsBtn.addEventListener('click', () => errorsModal.classList.add('hidden'));
+
+  clearErrorsBtn.addEventListener('click', async () => {
+      const confirmed = await showConfirm('Clear All Errors?', 'Are you sure you want to clear all persisted copy errors for all jobs? This action cannot be undone.', 'danger');
+      if (confirmed) {
+          jobErrors = {};
+          await window.electronAPI.setJobErrors({});
+          addLog('WARN', 'All persistent job errors have been cleared by the user.');
+          renderErrorPanel();
+          renderJobs();
+          setTimeout(() => errorsModal.classList.add('hidden'), 500);
+      }
+  });
+  // --- End Job Errors Panel ---
+
+
   const formatETA = (ms) => {
     if (ms <= 0 || !isFinite(ms)) {
       return '';
@@ -214,7 +283,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (hasPendingCleanup) {
             idleMessage = `${pendingCleanups[job.id].length} item(s) pending cleanup.`;
         } else if (hasPersistedErrors) {
-            idleMessage = 'Last run finished with errors';
+            idleMessage = `Last run finished with ${jobErrors[job.id].length} error(s)`;
         }
         
         const jobEl = document.createElement('div');
@@ -257,7 +326,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="job-status">
                             <span class="status-text">${idleMessage}</span>
                             <div class="status-details">
-                                <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${jobErrors[job.id].length} file(s) failed` : ''}</span>
+                                <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${jobErrors[job.id].length} error(s) stored` : ''}</span>
                                 <span class="status-count hidden"></span>
                                 <span class="status-eta hidden"></span>
                             </div>
@@ -310,22 +379,23 @@ document.addEventListener('DOMContentLoaded', () => {
     addLog('INFO', `Settings saved (Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}, Auto Cleanup: ${appSettings.autoCleanup}).`);
   };
 
+  const renderExclusionRule = (listEl, text) => {
+    const item = document.createElement('div');
+    item.className = 'exclusion-item';
+    item.innerHTML = `
+      <span>${text}</span>
+      <button type="button" class="btn-icon-sm btn-delete-exclusion" title="Remove rule"><i class="fa-solid fa-times"></i></button>
+    `;
+    item.querySelector('.btn-delete-exclusion').addEventListener('click', () => item.remove());
+    listEl.appendChild(item);
+  };
+
   const openJobModal = (job = null) => {
     jobForm.reset();
-    
-    // Reset exclusion UI
     jobExclusionsEnabledToggle.checked = false;
     exclusionsContainer.classList.add('hidden');
-    
-    const initTagInput = (container, values = []) => {
-      container.querySelectorAll('.tag').forEach(t => t.remove());
-      values.forEach(val => {
-        const tag = createTag(val);
-        container.insertBefore(tag, container.querySelector('input'));
-      });
-    };
-    initTagInput(excludedPathsContainer);
-    initTagInput(excludedExtensionsPathContainer);
+    excludedPathsList.innerHTML = '';
+    excludedExtensionsPathList.innerHTML = '';
     
     if (job) {
       modalTitle.textContent = 'Edit Backup Job';
@@ -337,8 +407,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (job.exclusions && job.exclusions.enabled) {
         jobExclusionsEnabledToggle.checked = true;
         exclusionsContainer.classList.remove('hidden');
-        initTagInput(excludedPathsContainer, job.exclusions.paths);
-        initTagInput(excludedExtensionsPathContainer, job.exclusions.extensions);
+        (job.exclusions.paths || []).forEach(p => renderExclusionRule(excludedPathsList, p));
+        (job.exclusions.extensions || []).forEach(e => renderExclusionRule(excludedExtensionsPathList, e));
       }
     } else {
       modalTitle.textContent = 'New Backup Job';
@@ -351,18 +421,6 @@ document.addEventListener('DOMContentLoaded', () => {
   
   const closeJobModal = () => jobModal.classList.add('hidden');
   
-  const showCopyErrorsModal = async (jobId) => {
-    const errors = jobErrors[jobId] || [];
-    if (errors.length === 0) return;
-
-    await showConfirm(
-        `Copy Errors (${errors.length})`,
-        `The following files failed to copy during the backup process:`,
-        'info',
-        { type: 'copyErrors', errors }
-    );
-  };
-
   const showConfirm = (title, message, okClass = 'danger', data = null) => {
     return new Promise(resolve => {
         confirmTitle.textContent = title;
@@ -373,21 +431,7 @@ document.addEventListener('DOMContentLoaded', () => {
             confirmFileList.classList.remove('hidden');
             const list = document.createElement('ul');
             
-            if (data.type === 'copyErrors') {
-                data.errors.slice(0, 100).forEach(err => {
-                    const item = document.createElement('li');
-                    item.className = 'confirm-error-item';
-                    item.innerHTML = `
-                        <span class="confirm-error-path">${err.path}</span>
-                        <span class="confirm-error-reason">${err.error}</span>`;
-                    list.appendChild(item);
-                });
-                if (data.errors.length > 100) {
-                    const item = document.createElement('li');
-                    item.textContent = `...and ${data.errors.length - 100} more errors.`;
-                    list.appendChild(item);
-                }
-            } else if (Array.isArray(data)) { // Single job cleanup
+            if (Array.isArray(data)) { // Single job cleanup
                  data.slice(0, 100).forEach(file => {
                     const item = document.createElement('li');
                     item.textContent = file.path;
@@ -449,6 +493,7 @@ document.addEventListener('DOMContentLoaded', () => {
   
   addJobBtn.addEventListener('click', () => openJobModal());
   document.getElementById('cancel-job-btn').addEventListener('click', closeJobModal);
+  document.getElementById('close-job-btn').addEventListener('click', closeJobModal);
   
   document.querySelectorAll('.btn-browse').forEach(button => {
     button.addEventListener('click', async (e) => {
@@ -463,14 +508,19 @@ document.addEventListener('DOMContentLoaded', () => {
   jobForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const id = jobIdInput.value;
+
+    const getRulesFromList = (listEl) => {
+        return Array.from(listEl.querySelectorAll('.exclusion-item span')).map(span => span.textContent);
+    };
+
     const newJobData = {
       name: jobNameInput.value.trim(),
       source: sourcePathInput.value,
       destination: destPathInput.value,
       exclusions: {
         enabled: jobExclusionsEnabledToggle.checked,
-        paths: Array.from(excludedPathsContainer.querySelectorAll('.tag')).map(t => t.firstChild.textContent),
-        extensions: Array.from(excludedExtensionsPathContainer.querySelectorAll('.tag')).map(t => t.firstChild.textContent),
+        paths: getRulesFromList(excludedPathsList),
+        extensions: getRulesFromList(excludedExtensionsPathList),
       }
     };
 
@@ -497,36 +547,34 @@ document.addEventListener('DOMContentLoaded', () => {
     closeJobModal();
   });
 
-  // --- Exclusion Tag Input Logic ---
-  const createTag = (text) => {
-    const tag = document.createElement('span');
-    tag.className = 'tag';
-    tag.textContent = text;
-    const closeBtn = document.createElement('i');
-    closeBtn.className = 'fa-solid fa-times tag-close';
-    closeBtn.onclick = () => tag.remove();
-    tag.appendChild(closeBtn);
-    return tag;
-  };
-  
-  [excludedPathsContainer, excludedExtensionsPathContainer].forEach(container => {
-    const input = container.querySelector('input');
-    input.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ',') {
-        e.preventDefault();
-        const value = input.value.trim();
-        if (value) {
-          const tag = createTag(value);
-          container.insertBefore(tag, input);
-          input.value = '';
-        }
-      }
-    });
-  });
-
+  // --- Exclusion UI Logic ---
   jobExclusionsEnabledToggle.addEventListener('change', (e) => {
     exclusionsContainer.classList.toggle('hidden', !e.target.checked);
   });
+
+  const setupExclusionAdder = (inputId, buttonId, listEl) => {
+    const input = document.getElementById(inputId);
+    const button = document.getElementById(buttonId);
+    const addRule = () => {
+      const value = input.value.trim();
+      if (value) {
+        renderExclusionRule(listEl, value);
+        input.value = '';
+        input.focus();
+      }
+    };
+    button.addEventListener('click', addRule);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addRule();
+      }
+    });
+  };
+
+  setupExclusionAdder('excluded-path-input', 'add-excluded-path-btn', excludedPathsList);
+  setupExclusionAdder('excluded-extension-input', 'add-excluded-extension-btn', excludedExtensionsPathList);
+
 
   // --- Drag and Drop Logic ---
   let draggedId = null;
@@ -609,6 +657,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const jobItem = e.target.closest('.job-item');
     const jobId = jobItem.dataset.id;
+    const job = jobs.find(j => j.id === jobId);
     
     if (button.classList.contains('btn-start-stop')) {
         if (runningJobs.has(jobId)) {
@@ -631,12 +680,10 @@ document.addEventListener('DOMContentLoaded', () => {
             window.electronAPI.startJob(jobId);
         }
     } else if (button.classList.contains('btn-view-errors')) {
-        showCopyErrorsModal(jobId);
+        openErrorPanel(job.name);
     } else if (button.classList.contains('btn-edit')) {
-        const job = jobs.find(j => j.id === jobId);
         openJobModal(job);
     } else if (button.classList.contains('btn-delete')) {
-        const job = jobs.find(j => j.id === jobId);
         const confirmed = await showConfirm(`Delete "${job.name}"?`, 'Are you sure you want to permanently delete this job configuration?', 'danger');
         if (confirmed) {
             jobs = jobs.filter(j => j.id !== jobId);
@@ -920,18 +967,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     if (payload && payload.copyErrors && payload.copyErrors.length > 0) {
-      jobErrors[jobId] = payload.copyErrors;
-      jobEl.classList.add('is-warning');
-      viewErrorsBtn.classList.remove('hidden');
-      statusWarning.textContent = `${payload.copyErrors.length} file(s) failed.`;
-      statusWarning.classList.remove('hidden');
-    } else if (status !== 'Copying') { // Don't clear warnings while copying
-      jobEl.classList.remove('is-warning');
-      viewErrorsBtn.classList.add('hidden');
-      statusWarning.classList.add('hidden');
-      delete jobErrors[jobId];
+      const allJobErrors = jobErrors[jobId] || [];
+      jobErrors[jobId] = [...allJobErrors, ...payload.copyErrors];
     }
     
+    const hasPersistedErrors = jobErrors[jobId] && jobErrors[jobId].length > 0;
+    jobEl.classList.toggle('is-warning', hasPersistedErrors);
+    viewErrorsBtn.classList.toggle('hidden', !hasPersistedErrors);
+    statusWarning.textContent = hasPersistedErrors ? `${jobErrors[jobId].length} error(s) stored` : '';
+    statusWarning.classList.toggle('hidden', !hasPersistedErrors);
+
     jobEl.classList.toggle('is-error', status === 'Error');
     jobEl.classList.toggle('is-done', status === 'Done');
 
@@ -957,13 +1002,13 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       setTimeout(() => {
         jobEl.classList.remove('is-error', 'is-done', 'is-scanning', 'is-copying', 'is-cleaning');
-        const hasPersistedErrors = jobErrors[jobId] && jobErrors[jobId].length > 0;
+        const hasCurrentErrors = jobErrors[jobId] && jobErrors[jobId].length > 0;
         const hasPendingCleanup = pendingCleanups[jobId] && pendingCleanups[jobId].length > 0;
         
         if (hasPendingCleanup) {
             statusText.textContent = `${pendingCleanups[jobId].length} item(s) pending cleanup.`;
-        } else if (hasPersistedErrors) {
-            statusText.textContent = 'Last run finished with errors';
+        } else if (hasCurrentErrors) {
+            statusText.textContent = `Last run finished with ${jobErrors[jobId].length} error(s)`;
             jobEl.classList.add('is-warning');
         } else {
             statusText.textContent = 'Idle';

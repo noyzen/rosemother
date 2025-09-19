@@ -48,57 +48,65 @@
   <!-- Job Add/Edit Modal -->
   <div id="job-modal" class="modal-overlay hidden">
     <div class="modal-content">
-      <h2 id="modal-title">New Backup Job</h2>
+      <div class="modal-header">
+        <h2 id="modal-title">New Backup Job</h2>
+        <button type="button" id="close-job-btn" class="btn-icon" aria-label="Close"><i class="fa-solid fa-times"></i></button>
+      </div>
       <form id="job-form">
-        <input type="hidden" id="job-id-input" />
-        <div class="form-group">
-            <label for="job-name">Job Name</label>
-            <input type="text" id="job-name" placeholder="e.g., My Documents Backup" required />
-        </div>
-        <div class="form-group">
-          <label for="source-path">Source Folder</label>
-          <div class="path-input-group">
-            <input type="text" id="source-path" placeholder="Select a source folder..." readonly required />
-            <button type="button" class="btn-browse" data-target="source-path">Browse...</button>
+        <div class="form-scroll-content">
+          <input type="hidden" id="job-id-input" />
+          <div class="form-group">
+              <label for="job-name">Job Name</label>
+              <input type="text" id="job-name" placeholder="e.g., My Documents Backup" required />
+          </div>
+          <div class="form-group">
+            <label for="source-path">Source Folder</label>
+            <div class="path-input-group">
+              <input type="text" id="source-path" placeholder="Select a source folder..." readonly required />
+              <button type="button" class="btn-browse" data-target="source-path">Browse...</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="dest-path">Destination Folder</label>
+            <div class="path-input-group">
+              <input type="text" id="dest-path" placeholder="Select a destination folder..." readonly required />
+              <button type="button" class="btn-browse" data-target="dest-path">Browse...</button>
+            </div>
+          </div>
+          
+          <div class="exclusions-section">
+              <div class="form-group-row">
+                  <label for="job-exclusions-enabled" class="setting-label">Exclusion Rules</label>
+                  <div class="form-group-control">
+                      <label class="toggle-switch">
+                          <input type="checkbox" id="job-exclusions-enabled">
+                          <span class="slider"></span>
+                      </label>
+                      <p class="setting-description">Exclude certain files or folders from this backup job.</p>
+                  </div>
+              </div>
+              <div id="exclusions-container" class="hidden">
+                  <div class="form-group">
+                      <label for="excluded-path-input">Excluded Folder/File Names</label>
+                      <div class="exclusion-input-group">
+                          <input type="text" id="excluded-path-input" placeholder="e.g., node_modules, .git"/>
+                          <button type="button" class="btn btn-secondary btn-sm" id="add-excluded-path-btn">Add</button>
+                      </div>
+                      <p class="setting-description mini">Matches names anywhere in the path.</p>
+                      <div class="exclusion-list" id="excluded-paths-list"></div>
+                  </div>
+                  <div class="form-group">
+                      <label for="excluded-extension-input">Excluded Extensions</label>
+                      <div class="exclusion-input-group">
+                          <input type="text" id="excluded-extension-input" placeholder="e.g., .log, .tmp"/>
+                          <button type="button" class="btn btn-secondary btn-sm" id="add-excluded-extension-btn">Add</button>
+                      </div>
+                      <p class="setting-description mini">Include the dot (e.g., `.log`).</p>
+                      <div class="exclusion-list" id="excluded-extensions-list"></div>
+                  </div>
+              </div>
           </div>
         </div>
-        <div class="form-group">
-          <label for="dest-path">Destination Folder</label>
-          <div class="path-input-group">
-            <input type="text" id="dest-path" placeholder="Select a destination folder..." readonly required />
-            <button type="button" class="btn-browse" data-target="dest-path">Browse...</button>
-          </div>
-        </div>
-        
-        <div class="exclusions-section">
-            <div class="form-group-row">
-                <label for="job-exclusions-enabled" class="setting-label">Exclusion Rules</label>
-                <div class="form-group-control">
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="job-exclusions-enabled">
-                        <span class="slider"></span>
-                    </label>
-                    <p class="setting-description">Exclude certain files or folders from this backup job.</p>
-                </div>
-            </div>
-            <div id="exclusions-container" class="hidden">
-                 <div class="form-group">
-                    <label for="job-excluded-paths-input">Excluded Folder/File Names</label>
-                    <div class="tag-input-container" id="job-excluded-paths">
-                        <input type="text" placeholder="e.g., node_modules, .git (press Enter)" />
-                    </div>
-                     <p class="setting-description mini">Matches names anywhere in the path.</p>
-                </div>
-                <div class="form-group">
-                    <label for="job-excluded-extensions-input">Excluded Extensions</label>
-                    <div class="tag-input-container" id="job-excluded-extensions">
-                        <input type="text" placeholder="e.g., .log, .tmp (press Enter)" />
-                    </div>
-                    <p class="setting-description mini">Include the dot (e.g., `.log`).</p>
-                </div>
-            </div>
-        </div>
-
         <div class="modal-actions">
           <button type="button" id="cancel-job-btn" class="btn btn-secondary">Cancel</button>
           <button type="submit" id="save-job-btn" class="btn btn-primary">Save Job</button>
@@ -141,6 +149,21 @@
         </div>
       </div>
       <div id="log-list-container"></div>
+    </div>
+  </div>
+
+  <!-- Job Errors Modal -->
+  <div id="errors-modal" class="modal-overlay hidden">
+    <div class="modal-content modal-log-viewer">
+      <div class="log-header">
+        <h2><i class="fa-solid fa-triangle-exclamation"></i> Job Copy Errors</h2>
+        <div class="log-controls">
+          <input type="text" id="errors-search-input" placeholder="Filter by path or job..." />
+          <button id="clear-errors-btn" class="btn btn-danger"><i class="fa-solid fa-trash-can"></i> Clear All Errors</button>
+          <button id="close-errors-btn" class="btn btn-secondary"><i class="fa-solid fa-times"></i></button>
+        </div>
+      </div>
+      <div id="errors-list-container"></div>
     </div>
   </div>
 
