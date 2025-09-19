@@ -227,52 +227,64 @@ async function countFiles(startPath, jobId, job = null) {
 }
 
 // Backup Logic
-async function performCleanup(job, files, progressCallback) {
-    if (!job || !files || files.length === 0) {
-        return { success: false, error: "Job or files not found." };
+async function performCleanup(job, items, progressCallback) {
+    if (!job || !items || items.length === 0) {
+        return { success: false, error: "Job or items to clean not found." };
     }
-    console.log(`[INFO] Starting cleanup for job ${job.id}. Deleting ${files.length} items.`);
+    console.log(`[INFO] Starting cleanup for job ${job.id}. Deleting ${items.length} items.`);
+    
     try {
-        const filesToDelete = files.filter(item => item.type === 'file');
-        const dirsToDelete = files.filter(item => item.type === 'dir');
-        
-        const totalCount = files.length;
+        // Sort all items by path depth, deepest first. This is crucial for directory deletion.
+        items.sort((a, b) => b.path.split(path.sep).length - a.path.split(path.sep).length);
+
+        const totalCount = items.length;
         let processedCount = 0;
-        const totalFilesToDelete = filesToDelete.length;
-        let filesDeletedCount = 0;
-        const totalDirsToDelete = dirsToDelete.length;
-        let dirsDeletedCount = 0;
+        const errors = [];
 
-        // 1. Delete all files first
-        for (const file of filesToDelete) {
+        for (const item of items) {
             processedCount++;
-            filesDeletedCount++;
+            if (stopFlags.has(job.id)) {
+                console.warn(`[WARN] Cleanup for job ${job.id} was stopped.`);
+                break;
+            }
+
+            const progress = totalCount > 0 ? (processedCount / totalCount) * 100 : 100;
+            const message = `Deleting ${item.type} ${processedCount} of ${totalCount}`;
             if (progressCallback) {
-                const progress = totalCount > 0 ? (processedCount / totalCount) * 100 : 100;
-                if (totalFilesToDelete > 0) {
-                    progressCallback(progress, `Deleting file ${filesDeletedCount} of ${totalFilesToDelete}`);
+                progressCallback(progress, message);
+            }
+
+            const fullPath = path.join(job.destination, item.path);
+            try {
+                // Use recursive for directories. For files, if we get EISDIR, it means it was misidentified, so retry as a directory.
+                const options = { force: true, recursive: item.type === 'dir' };
+                await fs.rm(fullPath, options);
+            } catch (err) {
+                if (err.code === 'ENOENT') {
+                    // Item was already deleted, likely because its parent directory was deleted. This is not an error.
+                    continue;
+                } else if (err.code === 'EISDIR' && item.type === 'file') {
+                    console.warn(`[WARN] Cleanup: Item '${item.path}' was a directory, not a file. Retrying with recursive delete.`);
+                    await fs.rm(fullPath, { force: true, recursive: true }).catch(retryErr => {
+                        if (retryErr.code !== 'ENOENT') {
+                           errors.push({ path: item.path, error: `Failed to delete misclassified directory: ${retryErr.message}` });
+                        }
+                    });
+                } else {
+                    errors.push({ path: item.path, error: err.message });
                 }
             }
-            await fs.rm(path.join(job.destination, file.path), { force: true }).catch(err => console.error(`[ERROR] Failed to delete file ${file.path}: ${err.message}`));
+        }
+        
+        if (errors.length > 0) {
+            errors.forEach(e => console.error(`[ERROR] Failed to delete ${e.path}: ${e.error}`));
+            return { success: false, error: `Cleanup finished with ${errors.length} errors.` };
         }
 
-        // 2. Delete directories, deepest first
-        dirsToDelete.sort((a, b) => b.path.split(path.sep).length - a.path.split(path.sep).length);
-        for (const dir of dirsToDelete) {
-            processedCount++;
-            dirsDeletedCount++;
-            if (progressCallback) {
-                const progress = totalCount > 0 ? (processedCount / totalCount) * 100 : 100;
-                if (totalDirsToDelete > 0) {
-                    progressCallback(progress, `Deleting folder ${dirsDeletedCount} of ${totalDirsToDelete}`);
-                }
-            }
-            await fs.rm(path.join(job.destination, dir.path), { recursive: true, force: true }).catch(err => console.error(`[ERROR] Failed to delete directory ${dir.path}: ${err.message}`));
-        }
         console.log(`[SUCCESS] Cleanup for job ${job.id} completed.`);
         return { success: true };
     } catch (error) {
-        console.error(`[ERROR] Error during cleanup for job ${job.id}: ${error.message}`);
+        console.error(`[ERROR] A critical error occurred during cleanup for job ${job.id}: ${error.message}`);
         return { success: false, error: error.message };
     }
 }
@@ -282,42 +294,41 @@ ipcMain.on('job:stop', (event, jobId) => {
     stopFlags.set(jobId, true);
 });
 
-async function calculateOrphanDirs(job, sourcePaths) {
-    const orphanDirs = new Set();
-    const queue = ['']; // Start from the root of the destination
-
+async function getAllRelativeDirs(startPath, jobId) {
+    const dirs = new Set();
+    const queue = [startPath];
+    const YIELD_THRESHOLD = 500;
+    let processedCount = 0;
+    
     while (queue.length > 0) {
-        const currentRelativeDir = queue.shift();
-        
-        const currentDestPath = path.join(job.destination, currentRelativeDir);
+        if (stopFlags.has(jobId)) {
+            console.warn(`[WARN] Job ${jobId}: getAllRelativeDirs received stop signal.`);
+            throw new Error('DIR_SCAN_STOPPED');
+        }
+        const currentPath = queue.shift();
+
+        processedCount++;
+        if (processedCount % YIELD_THRESHOLD === 0) {
+             await new Promise(resolve => setImmediate(resolve));
+        }
+
         let dirents;
         try {
-            dirents = await fs.readdir(currentDestPath, { withFileTypes: true });
+            dirents = await fs.readdir(currentPath, { withFileTypes: true });
         } catch (e) {
-            // This directory might not exist if it was part of a larger orphan dir that was already processed.
-            if (e.code !== 'ENOENT') {
-                console.warn(`[WARN] Job ${job.id}: Could not read directory for orphan check: ${currentDestPath}. Error: ${e.message}`);
-            }
             continue;
         }
 
         for (const dirent of dirents) {
             if (dirent.isDirectory()) {
-                const childRelativePath = path.join(currentRelativeDir, dirent.name);
-                
-                if (!sourcePaths.has(childRelativePath)) {
-                    // This directory does not exist in the source, so it's an orphan.
-                    // We add it and everything inside it will be deleted recursively. No need to traverse inside.
-                    orphanDirs.add(childRelativePath);
-                } else {
-                    // This directory exists in the source, so we need to check its contents.
-                    queue.push(childRelativePath);
-                }
+                const fullPath = path.join(currentPath, dirent.name);
+                const relativePath = path.relative(startPath, fullPath);
+                dirs.add(relativePath);
+                queue.push(fullPath);
             }
         }
     }
-    
-    return Array.from(orphanDirs).map(p => ({ path: p, type: 'dir' }));
+    return Array.from(dirs);
 }
 
 function calculateOrphanFiles(sourcePaths, destIndex) {
@@ -626,7 +637,11 @@ ipcMain.on('job:start', async (event, jobId) => {
 
         sendUpdate('Cleaning', -1, 'Checking for files to delete...');
         const orphanFiles = calculateOrphanFiles(sourcePaths, destIndex);
-        const orphanDirs = await calculateOrphanDirs(job, sourcePaths);
+        const allDestDirs = await getAllRelativeDirs(job.destination, jobId);
+        const orphanDirs = allDestDirs
+            .filter(dir => !sourcePaths.has(dir))
+            .map(p => ({ path: p, type: 'dir' }));
+            
         const toDelete = [...orphanFiles, ...orphanDirs];
         console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items in destination (${orphanFiles.length} files, ${orphanDirs.length} directories).`);
         
@@ -683,7 +698,10 @@ ipcMain.on('job:start', async (event, jobId) => {
     } catch(err) {
         console.error(`[ERROR] A critical error occurred in job ${jobId}: ${err.message}\n${err.stack}`);
         const orphanFiles = calculateOrphanFiles(sourcePaths, destIndex);
-        const orphanDirs = await calculateOrphanDirs(job, sourcePaths);
+        const allDestDirs = await getAllRelativeDirs(job.destination, jobId).catch(() => []);
+        const orphanDirs = allDestDirs
+            .filter(dir => !sourcePaths.has(dir))
+            .map(p => ({ path: p, type: 'dir' }));
         const toDelete = [...orphanFiles, ...orphanDirs];
         if (toDelete.length > 0) {
             console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items that can be cleaned up despite the error.`);
