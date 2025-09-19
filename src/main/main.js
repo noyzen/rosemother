@@ -1,4 +1,5 @@
 
+
 const { app, BrowserWindow, Menu, ipcMain, dialog, powerSaveBlocker } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
@@ -321,8 +322,11 @@ ipcMain.on('job:start', async (event, jobId) => {
         }, SAVE_INTERVAL);
     };
 
+    runningJobsInMain.add(jobId);
+    stopFlags.delete(jobId);
+
     try {
-        if (runningJobsInMain.size === 0) {
+        if (runningJobsInMain.size === 1) { // Only when the first job starts
             if (settings.preventSleep) {
                 powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension');
                 if (powerSaveBlocker.isStarted(powerSaveBlockerId)) {
@@ -330,8 +334,7 @@ ipcMain.on('job:start', async (event, jobId) => {
                 }
             }
         }
-        runningJobsInMain.add(jobId);
-        stopFlags.delete(jobId);
+        
         logToRenderer('INFO', `Job ${jobId} started.`);
 
         try {
@@ -568,6 +571,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
 
         runningJobsInMain.delete(jobId);
+        stopFlags.delete(jobId); // Ensure stop flag is always cleared on exit
         if (runningJobsInMain.size === 0 && powerSaveBlockerId) {
             powerSaveBlocker.stop(powerSaveBlockerId);
             logToRenderer('INFO', 'System sleep prevention has been lifted.');
