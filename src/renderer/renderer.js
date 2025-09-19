@@ -199,32 +199,46 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="job-content">
                 <div class="job-header">
                     <h3 class="job-name">${job.name || 'Untitled Job'}</h3>
-                    <div class="job-actions">
-                        <button class="btn-icon btn-view-errors ${hasPersistedErrors ? '' : 'hidden'}" title="View Errors"><i class="fa-solid fa-triangle-exclamation"></i></button>
-                        <button class="btn-icon btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" title="Cleanup Files"><i class="fa-solid fa-broom"></i></button>
-                        <button class="btn-icon btn-start-stop" title="Start Backup"><i class="fa-solid fa-play"></i></button>
-                        <button class="btn-icon btn-edit" title="Edit Job"><i class="fa-solid fa-pencil"></i></button>
-                        <button class="btn-icon btn-delete" title="Delete Job"><i class="fa-solid fa-trash-can"></i></button>
+                </div>
+
+                <div class="job-paths-container">
+                    <div class="job-path-block">
+                        <div class="job-path-label">SOURCE</div>
+                        <div class="path-display" title="${job.source}">
+                            <i class="fa-regular fa-folder-open source-icon"></i>
+                            <span class="path-text">${job.source}</span>
+                        </div>
+                    </div>
+                    <div class="job-path-arrow">
+                        <i class="fa-solid fa-right-long"></i>
+                    </div>
+                    <div class="job-path-block">
+                        <div class="job-path-label">DESTINATION</div>
+                        <div class="path-display" title="${job.destination}">
+                            <i class="fa-solid fa-server dest-icon"></i>
+                            <span class="path-text">${job.destination}</span>
+                        </div>
                     </div>
                 </div>
-                <div class="job-paths">
-                    <div class="path-display" title="${job.source}">
-                        <i class="fa-regular fa-folder-open source-icon"></i>
-                        <span class="path-text">${job.source}</span>
-                    </div>
-                    <div class="path-display" title="${job.destination}">
-                        <i class="fa-solid fa-server dest-icon"></i>
-                        <span class="path-text">${job.destination}</span>
-                    </div>
-                </div>
+
                 <div class="job-footer">
-                     <div class="job-status">
-                         <span class="status-text">${idleMessage}</span>
-                         <span class="status-eta hidden"></span>
-                         <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${jobErrors[job.id].length} file(s) failed` : ''}</span>
-                    </div>
-                    <div class="progress-bar-container">
-                        <div class="progress-bar"></div>
+                     <div class="job-status-container">
+                        <div class="job-status">
+                            <span class="status-text">${idleMessage}</span>
+                            <span class="status-eta hidden"></span>
+                            <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${jobErrors[job.id].length} file(s) failed` : ''}</span>
+                        </div>
+                        <div class="progress-bar-container">
+                            <div class="progress-bar"></div>
+                        </div>
+                     </div>
+                     <div class="job-actions">
+                        <button class="btn btn-sm btn-warning btn-view-errors ${hasPersistedErrors ? '' : 'hidden'}" title="View Errors"><i class="fa-solid fa-triangle-exclamation"></i> Errors</button>
+                        <button class="btn btn-sm btn-warning btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" title="Cleanup Files"><i class="fa-solid fa-broom"></i> Cleanup</button>
+                        <button class="btn btn-sm btn-primary btn-start-stop" title="Start Backup"><i class="fa-solid fa-play"></i> Start</button>
+                        <div class="job-actions-divider"></div>
+                        <button class="btn btn-sm btn-secondary btn-edit" title="Edit Job"><i class="fa-solid fa-pencil"></i> Edit</button>
+                        <button class="btn btn-sm btn-secondary btn-delete" title="Delete Job"><i class="fa-solid fa-trash-can"></i> Delete</button>
                     </div>
                 </div>
             </div>`;
@@ -726,14 +740,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (isRunning) {
       runningJobs.add(jobId);
-      startStopBtn.innerHTML = '<i class="fa-solid fa-stop"></i>';
+      startStopBtn.innerHTML = '<i class="fa-solid fa-stop"></i> Stop';
       startStopBtn.setAttribute('title', 'Stop Backup');
-      startStopBtn.classList.add('is-stop');
+      startStopBtn.classList.add('is-stop', 'btn-danger');
+      startStopBtn.classList.remove('btn-primary');
     } else {
       runningJobs.delete(jobId);
-      startStopBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
+      startStopBtn.innerHTML = '<i class="fa-solid fa-play"></i> Start';
       startStopBtn.setAttribute('title', 'Start Backup');
-      startStopBtn.classList.remove('is-stop');
+      startStopBtn.classList.remove('is-stop', 'btn-danger');
+      startStopBtn.classList.add('btn-primary');
     }
 
     if (status === 'Copying' && payload && payload.eta > 0) {
