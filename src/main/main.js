@@ -1,3 +1,7 @@
+
+
+
+
 const { app, BrowserWindow, Menu, ipcMain, dialog, powerSaveBlocker } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
@@ -181,6 +185,52 @@ function isExcluded(relativePath, jobExclusions) {
     return false;
 }
 
+async function countFiles(startPath, jobId, job = null) {
+    console.log(`[INFO] Job ${jobId}: countFiles started for path: ${startPath}`);
+    let fileCount = 0;
+    let dirCount = 0;
+    const queue = [startPath];
+    const YIELD_THRESHOLD = 500; // Yield to event loop every 500 directories processed
+    
+    while (queue.length > 0) {
+        if (stopFlags.has(jobId)) {
+            console.warn(`[WARN] Job ${jobId}: countFiles received stop signal.`);
+            throw new Error('COUNT_STOPPED');
+        }
+        const currentPath = queue.shift();
+
+        dirCount++;
+        if (dirCount % YIELD_THRESHOLD === 0) {
+             await new Promise(resolve => setImmediate(resolve));
+        }
+
+        let dirents;
+        try {
+            dirents = await fs.readdir(currentPath, { withFileTypes: true });
+        } catch (e) {
+            console.warn(`[WARN] Job ${jobId}: countFiles could not read directory ${currentPath}. Error: ${e.message}`);
+            continue;
+        }
+
+        for (const dirent of dirents) {
+            const fullPath = path.join(currentPath, dirent.name);
+            const relativePath = path.relative(startPath, fullPath);
+
+            if (job && job.exclusions && isExcluded(relativePath, job.exclusions)) {
+                continue;
+            }
+
+            if (dirent.isDirectory()) {
+                queue.push(fullPath);
+            } else if (dirent.isFile()) {
+                fileCount++;
+            }
+        }
+    }
+    console.log(`[INFO] Job ${jobId}: countFiles finished for path: ${startPath}. Total files: ${fileCount}, Dirs: ${dirCount}.`);
+    return fileCount;
+}
+
 function robustDelete(fullPath) {
     return new Promise((resolve, reject) => {
         // Safety check to prevent deleting critical paths
@@ -276,6 +326,54 @@ ipcMain.on('job:stop', (event, jobId) => {
     stopFlags.set(jobId, true);
 });
 
+async function getAllRelativeDirs(startPath, jobId) {
+    const dirs = new Set();
+    const queue = [startPath];
+    const YIELD_THRESHOLD = 500;
+    let processedCount = 0;
+    
+    while (queue.length > 0) {
+        if (stopFlags.has(jobId)) {
+            console.warn(`[WARN] Job ${jobId}: getAllRelativeDirs received stop signal.`);
+            throw new Error('DIR_SCAN_STOPPED');
+        }
+        const currentPath = queue.shift();
+
+        processedCount++;
+        if (processedCount % YIELD_THRESHOLD === 0) {
+             await new Promise(resolve => setImmediate(resolve));
+        }
+
+        let dirents;
+        try {
+            dirents = await fs.readdir(currentPath, { withFileTypes: true });
+        } catch (e) {
+            continue;
+        }
+
+        for (const dirent of dirents) {
+            if (dirent.isDirectory()) {
+                const fullPath = path.join(currentPath, dirent.name);
+                const relativePath = normalizePath(path.relative(startPath, fullPath));
+                dirs.add(relativePath);
+                queue.push(fullPath);
+            }
+        }
+    }
+    return Array.from(dirs);
+}
+
+function calculateOrphanFiles(sourcePaths, destIndex) {
+    const toDelete = [];
+    for (const destPath in destIndex) {
+        // Comparison is case-insensitive and uses normalized paths.
+        if (!sourcePaths.has(normalizePath(destPath).toLowerCase())) {
+            toDelete.push({ path: destPath, type: 'file' });
+        }
+    }
+    return toDelete;
+}
+
 function calculatePartialFileHash(filePath, bytesToRead = 1024 * 1024) { // 1MB
     return new Promise((resolve, reject) => {
         const hash = crypto.createHash('sha256');
@@ -314,114 +412,6 @@ async function loadIndex(filePath) {
     return {};
 }
 
-// --- New, Safer Architecture Functions ---
-
-async function buildSourceIndex(jobId, job) {
-    console.log(`[INFO] Job ${jobId}: Starting source index build at ${job.source}.`);
-    const index = new Map(); // Map<string, {size, mtimeMs, hash?}>
-    const allPaths = new Set(); // Set<string> for all files and directories for cleanup comparison
-    const queue = [{ dir: job.source, relativeDir: '' }];
-    const YIELD_THRESHOLD = 500;
-    let processedCount = 0;
-
-    while (queue.length > 0) {
-        if (stopFlags.has(jobId)) throw new Error('SCAN_STOPPED');
-        const { dir, relativeDir } = queue.shift();
-
-        processedCount++;
-        if (processedCount % YIELD_THRESHOLD === 0) await new Promise(resolve => setImmediate(resolve));
-
-        let dirents;
-        try {
-            dirents = await fs.readdir(dir, { withFileTypes: true });
-        } catch (e) {
-            console.warn(`[WARN] Job ${jobId}: Could not read source directory ${dir}: ${e.message}`);
-            continue;
-        }
-
-        for (const dirent of dirents) {
-            const currentRelativePath = path.join(relativeDir, dirent.name);
-            const normalizedRelativePath = normalizePath(currentRelativePath);
-
-            if (isExcluded(normalizedRelativePath, job.exclusions)) {
-                continue;
-            }
-
-            allPaths.add(normalizedRelativePath.toLowerCase());
-            const fullPath = path.join(dir, dirent.name);
-
-            if (dirent.isDirectory()) {
-                queue.push({ dir: fullPath, relativeDir: currentRelativePath });
-            } else if (dirent.isFile()) {
-                try {
-                    const stats = await fs.stat(fullPath);
-                    const fileData = { size: stats.size, mtimeMs: stats.mtimeMs };
-                    if (job.verifyContent) {
-                        fileData.hash = await calculatePartialFileHash(fullPath);
-                    }
-                    index.set(normalizedRelativePath, fileData);
-                } catch (err) {
-                     console.warn(`[WARN] Job ${jobId}: Could not stat source file ${fullPath}: ${err.message}`);
-                }
-            }
-        }
-    }
-    console.log(`[INFO] Job ${jobId}: Finished source index build. Found ${index.size} files.`);
-    return { index, allPaths };
-}
-
-async function buildDestIndex(jobId, job, oldIndex) {
-    console.log(`[INFO] Job ${jobId}: Starting destination index build at ${job.destination}.`);
-    const index = new Map(); // Map<string, {size, mtimeMs, hash?}>
-    const allPaths = new Set(); // Set<string> for all files and directories
-    const queue = [{ dir: job.destination, relativeDir: '' }];
-    const YIELD_THRESHOLD = 500;
-    let processedCount = 0;
-
-    while (queue.length > 0) {
-        if (stopFlags.has(jobId)) throw new Error('SCAN_STOPPED');
-        const { dir, relativeDir } = queue.shift();
-        
-        processedCount++;
-        if (processedCount % YIELD_THRESHOLD === 0) {
-            await new Promise(resolve => setImmediate(resolve));
-            sendUpdateForJob(jobId, 'Scanning', -1, `Scanning destination: ${processedCount.toLocaleString()} items...`);
-        }
-
-        let dirents;
-        try {
-            dirents = await fs.readdir(dir, { withFileTypes: true });
-        } catch (e) { continue; }
-
-        for (const dirent of dirents) {
-            const currentRelativePath = path.join(relativeDir, dirent.name);
-            const normalizedRelativePath = normalizePath(currentRelativePath);
-            allPaths.add(normalizedRelativePath.toLowerCase());
-            const fullPath = path.join(dir, dirent.name);
-
-            if (dirent.isDirectory()) {
-                queue.push({ dir: fullPath, relativeDir: currentRelativePath });
-            } else if (dirent.isFile()) {
-                try {
-                    const stats = await fs.stat(fullPath);
-                    const fileData = { size: stats.size, mtimeMs: stats.mtimeMs };
-                    
-                    const oldEntry = oldIndex[normalizedRelativePath];
-                    if (oldEntry && oldEntry.size === stats.size && oldEntry.mtimeMs === stats.mtimeMs && oldEntry.hash) {
-                        fileData.hash = oldEntry.hash;
-                    }
-                    index.set(normalizedRelativePath, fileData);
-                } catch (err) {
-                    console.warn(`[WARN] Job ${jobId}: Could not scan destination file ${fullPath}: ${err.message}`);
-                }
-            }
-        }
-    }
-    console.log(`[INFO] Job ${jobId}: Finished destination index build. Found ${index.size} files.`);
-    return { index, allPaths };
-}
-
-
 ipcMain.on('job:start', async (event, jobId) => {
     if (runningJobsInMain.has(jobId)) {
         console.warn(`[WARN] Job ${jobId} is already running. Start request ignored.`);
@@ -446,8 +436,21 @@ ipcMain.on('job:start', async (event, jobId) => {
     const indexFilePath = path.join(indexesPath, `${job.id}.json`);
     const tempIndexFilePath = `${indexFilePath}.tmp`;
 
-    // --- State Setup ---
-    let destIndex; // This will be a Map
+    // --- Reliable Index Rebuilding ---
+    // 1. Load the old index ONLY to get cached hashes.
+    const oldIndexWithHashes = await loadIndex(indexFilePath);
+    const isFirstRun = Object.keys(oldIndexWithHashes).length === 0;
+    let firstRunHintSent = false;
+    const sendUpdate = (status, progress, message, payload = {}) => {
+        if (isFirstRun && !firstRunHintSent) {
+            payload.isFirstRun = true;
+            firstRunHintSent = true;
+        }
+        sendUpdateForJob(jobId, status, progress, message, payload);
+    };
+
+    let destIndex = {};
+    
     let saveTimeout = null;
     const SAVE_INTERVAL = 3000;
     const scheduleSave = () => {
@@ -456,17 +459,19 @@ ipcMain.on('job:start', async (event, jobId) => {
             saveTimeout = null;
             if (stopFlags.has(jobId)) return;
             try {
-                // Convert Map to object for JSON serialization
-                const indexToSave = { destinationPath: job.destination, files: Object.fromEntries(destIndex) };
+                const indexToSave = { destinationPath: job.destination, files: destIndex };
                 await fs.writeFile(tempIndexFilePath, JSON.stringify(indexToSave));
             } catch (e) {
                 console.warn(`[WARN] Job ${jobId}: Periodic index save failed: ${e.message}`);
             }
         }, SAVE_INTERVAL);
     };
-    
+
     runningJobsInMain.add(jobId);
     stopFlags.delete(jobId);
+    
+    const sourcePaths = new Set();
+    const YIELD_THRESHOLD = 500; // General threshold for yielding to event loop
     const copyErrors = [];
 
     try {
@@ -480,7 +485,6 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
         
         console.log(`[INFO] Job ${jobId} started.`);
-        const sendUpdate = (status, progress, message, payload = {}) => sendUpdateForJob(jobId, status, progress, message, payload);
 
         try {
             await fs.access(job.source);
@@ -492,91 +496,203 @@ ipcMain.on('job:start', async (event, jobId) => {
             return;
         }
 
-        // --- PHASE 1: SOURCE & DESTINATION INDEXING ---
-        sendUpdate('Scanning', -1, 'Scanning source files...');
-        const { index: sourceIndex, allPaths: sourcePathsSet } = await buildSourceIndex(jobId, job);
-        if (stopFlags.has(jobId)) throw new Error('SCAN_STOPPED');
-        const isFirstRun = sourceIndex.size > 0 && !(await fs.access(indexFilePath).then(() => true).catch(() => false));
-        if (isFirstRun) sendUpdate('Scanning', -1, 'Scanning source files...', { isFirstRun: true });
-        
-        sendUpdate('Scanning', -1, 'Scanning destination files...');
-        const oldDestIndexForHashes = await loadIndex(indexFilePath);
-        const { index, allPaths: destPathsSet } = await buildDestIndex(jobId, job, oldDestIndexForHashes);
-        destIndex = index; // Assign to the mutable destIndex
-        if (stopFlags.has(jobId)) throw new Error('SCAN_STOPPED');
+        // 2. Always rebuild the index from what's currently on disk for reliability.
+        destIndex = {};
+        sendUpdate('Scanning', -1, 'Scanning destination for changes...');
+        let totalFileCount = 0;
+        try {
+            console.log(`[INFO] Job ${jobId}: Starting to count destination files at ${job.destination}.`);
+            totalFileCount = await countFiles(job.destination, jobId);
+            if (stopFlags.has(jobId)) { throw new Error('COUNT_STOPPED'); }
+            console.log(`[INFO] Job ${jobId}: Finished counting. Found approx ${totalFileCount.toLocaleString()} files in destination.`);
+        } catch (err) {
+            if (err.message === 'COUNT_STOPPED') {
+                console.warn(`[WARN] Job ${jobId}: Stop requested during destination file count.`);
+                sendUpdate('Stopped', 0, 'Job stopped by user.');
+                return;
+            }
+            console.warn(`[WARN] Job ${jobId}: Could not count dest files. Progress indeterminate. Error: ${err.message}`);
+        }
 
-        // --- PHASE 2: COPYING ---
-        const sourceFilesToProcess = Array.from(sourceIndex.keys());
-        const totalSourceFiles = sourceFilesToProcess.length;
+        if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
+
+        let scannedFileCount = 0;
+        async function buildIndex(relativeDir) {
+            if (stopFlags.has(jobId)) return;
+            const dir = path.join(job.destination, relativeDir);
+            let dirents;
+            try { dirents = await fs.readdir(dir, { withFileTypes: true }); } catch (e) { return; }
+
+            for (const dirent of dirents) {
+                if (stopFlags.has(jobId)) return;
+                const currentRelativePath = path.join(relativeDir, dirent.name);
+                const relativePath = normalizePath(currentRelativePath); // Normalize path
+                const fullPath = path.join(dir, dirent.name);
+                
+                if (dirent.isDirectory()) {
+                    await buildIndex(currentRelativePath);
+                } else if (dirent.isFile()) {
+                    scannedFileCount++;
+                    if (scannedFileCount % YIELD_THRESHOLD === 0) {
+                        await new Promise(resolve => setImmediate(resolve));
+                    }
+                    const progress = totalFileCount > 0 ? Math.min((scannedFileCount / totalFileCount) * 100, 100) : -1;
+                    const message = totalFileCount > 0 ? `Scanning destination: ${scannedFileCount.toLocaleString()} of ${totalFileCount.toLocaleString()}` : `Scanning destination: ${scannedFileCount.toLocaleString()} files...`;
+                    sendUpdate('Scanning', progress, message);
+
+                    try {
+                        const stats = await fs.stat(fullPath);
+                        destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs };
+
+                        // 3. Carry over the hash from the old index if file metadata matches.
+                        // Lookup in old index must also use normalized path.
+                        const oldEntry = oldIndexWithHashes[relativePath];
+                        if (oldEntry && oldEntry.size === stats.size && oldEntry.mtimeMs === stats.mtimeMs && oldEntry.hash) {
+                            destIndex[relativePath].hash = oldEntry.hash;
+                        }
+
+                        scheduleSave();
+                    } catch (err) { console.warn(`[WARN] Job ${jobId}: Could not scan ${relativePath}: ${err.message}`); }
+                }
+            }
+        }
+        await buildIndex('');
+        if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
+        
+        sendUpdate('Scanning', -1, 'Counting source files...');
+        let totalSourceFiles = 0;
+        try {
+            console.log(`[INFO] Job ${jobId}: Starting to count source files at ${job.source}.`);
+            totalSourceFiles = await countFiles(job.source, jobId, job); // Pass job for exclusions
+            if (stopFlags.has(jobId)) { throw new Error('COUNT_STOPPED'); } // Re-check
+            console.log(`[INFO] Job ${jobId}: Finished counting. Found approx ${totalSourceFiles.toLocaleString()} files in source.`);
+        } catch (err) {
+            if (err.message === 'COUNT_STOPPED') { 
+                console.warn(`[WARN] Job ${jobId}: Stop requested during source file count.`);
+                sendUpdate('Stopped', 0, 'Job stopped by user.'); 
+                return; 
+            }
+            console.warn(`[WARN] Job ${jobId}: Could not count source files. Progress will be indeterminate.`);
+        }
+
+        if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
+
         let processedFiles = 0;
 
-        sendUpdate('Copying', 0, `Starting backup of ${totalSourceFiles.toLocaleString()} file(s)...`);
+        async function syncDirectory(relativeDir) {
+            if (stopFlags.has(jobId)) return;
+            const sourceDir = path.join(job.source, relativeDir);
+            let dirents;
+            try { dirents = await fs.readdir(sourceDir, { withFileTypes: true }); } catch (err) { return; }
 
-        for (const relativePath of sourceFilesToProcess) {
-            if (stopFlags.has(jobId)) break;
-
-            processedFiles++;
-            const progress = totalSourceFiles > 0 ? Math.min((processedFiles / totalSourceFiles) * 100, 100) : -1;
-            const copyPayload = { processedFiles, totalSourceFiles, errorCount: copyErrors.length };
-
-            try {
-                sendUpdate('Copying', progress, `Checking: ${relativePath}`, copyPayload);
-                const sourceEntry = sourceIndex.get(relativePath);
-                const destEntry = destIndex.get(relativePath);
-                let needsCopy = false;
-
-                if (!destEntry) {
-                    needsCopy = true;
-                } else if (sourceEntry.size !== destEntry.size) {
-                    needsCopy = true;
-                } else if (job.verifyContent) {
-                    let destHash = destEntry.hash;
-                    if (!destHash) {
-                        const destPathForHash = path.join(job.destination, relativePath);
-                        destHash = await calculatePartialFileHash(destPathForHash);
-                        destEntry.hash = destHash; // Cache for this session
-                    }
-                    if (sourceEntry.hash !== destHash) {
-                        needsCopy = true;
-                    }
-                } else {
-                    const mtimeChanged = Math.abs(destEntry.mtimeMs - sourceEntry.mtimeMs) > 2000;
-                    if (mtimeChanged) needsCopy = true;
+            for (const [index, dirent] of dirents.entries()) {
+                if (stopFlags.has(jobId)) return;
+                
+                // Yield to event loop to keep UI responsive on very large directories
+                if (index > 0 && index % YIELD_THRESHOLD === 0) {
+                    await new Promise(resolve => setImmediate(resolve));
                 }
-
-                if (needsCopy) {
-                    const action = destEntry ? 'Updating' : 'Copying';
-                    sendUpdate('Copying', progress, `${action}: ${relativePath}`, copyPayload);
-                    
-                    const sourcePath = path.join(job.source, relativePath);
-                    const destPath = path.join(job.destination, relativePath);
-                    
-                    await fs.mkdir(path.dirname(destPath), { recursive: true });
-                    await fs.copyFile(sourcePath, destPath);
-                    const newDestStats = await fs.stat(destPath);
-                    await fs.utimes(destPath, new Date(sourceEntry.mtimeMs), new Date(sourceEntry.mtimeMs));
-                    
-                    const newDestData = { size: newDestStats.size, mtimeMs: newDestStats.mtimeMs };
-                    if (job.verifyContent) {
-                        newDestData.hash = sourceEntry.hash; // Use pre-calculated source hash
-                    }
-                    destIndex.set(relativePath, newDestData);
-                    scheduleSave();
+                
+                const currentRelativePath = path.join(relativeDir, dirent.name);
+                const relativePath = normalizePath(currentRelativePath); // Normalize path
+                sourcePaths.add(relativePath.toLowerCase());
+                
+                if (job.exclusions && isExcluded(currentRelativePath, job.exclusions)) { // isExcluded handles its own normalization
+                    continue; // Skip excluded files and directories
                 }
+                
+                const sourcePath = path.join(job.source, currentRelativePath);
+                const destPath = path.join(job.destination, currentRelativePath);
+                
+                if (dirent.isDirectory()) {
+                    await fs.mkdir(destPath, { recursive: true }).catch(() => {});
+                    await syncDirectory(currentRelativePath);
+                } else if (dirent.isFile()) {
+                    processedFiles++; // Increment counter only for files
+                    const progress = totalSourceFiles > 0 ? Math.min((processedFiles / totalSourceFiles) * 100, 100) : -1;
+                    const copyPayload = { processedFiles, totalSourceFiles, errorCount: copyErrors.length };
+                    
+                    try {
+                        sendUpdate('Copying', progress, `Checking: ${relativePath}`, copyPayload);
+                        const sourceStats = await fs.stat(sourcePath);
+                        // Lookup in destIndex must also use normalized path.
+                        const destEntry = destIndex[relativePath];
 
-            } catch (error) {
-                if (error.code === 'ENOENT') {
-                    console.warn(`[WARN] Job ${jobId}: Source file disappeared during copy: ${relativePath}. Skipping.`);
-                } else {
-                    const newError = { path: relativePath, error: error.message };
-                    copyErrors.push(newError);
-                    console.error(`[ERROR] Job ${jobId}: Failed to process ${relativePath}: ${error.message}`);
-                    sendUpdate('Copying', progress, `Error: ${relativePath}`, { ...copyPayload, errorCount: copyErrors.length, newError });
+                        let needsCopy = false;
+                        let sourceHash; // To be used if copy is needed
+
+                        if (!destEntry) {
+                            needsCopy = true;
+                        } else if (sourceStats.size !== destEntry.size) {
+                            needsCopy = true;
+                        } else if (job.verifyContent) {
+                            // Deep verification: size matches, check partial hash
+                            sendUpdate('Copying', progress, `Verifying: ${relativePath}`, copyPayload);
+                            sourceHash = await calculatePartialFileHash(sourcePath);
+                            let destHash = destEntry.hash;
+                            if (!destHash) {
+                                try {
+                                    destHash = await calculatePartialFileHash(destPath);
+                                    destEntry.hash = destHash; // Cache it
+                                } catch (e) {
+                                    needsCopy = true;
+                                }
+                            }
+                            if (sourceHash !== destHash) {
+                                needsCopy = true;
+                            }
+                        } else {
+                            // Standard check: size matches, check modification time
+                            const mtimeChanged = Math.abs(destEntry.mtimeMs - sourceStats.mtimeMs) > 2000;
+                            if (mtimeChanged) {
+                                needsCopy = true;
+                            }
+                        }
+
+                        if (needsCopy) {
+                            const action = destEntry ? 'Updating' : 'Copying';
+                            sendUpdate('Copying', progress, `${action}: ${relativePath}`, copyPayload);
+                            
+                            await fs.mkdir(path.dirname(destPath), { recursive: true });
+                            await fs.copyFile(sourcePath, destPath);
+                            const newDestStats = await fs.stat(destPath);
+                            await fs.utimes(destPath, new Date(sourceStats.mtimeMs), new Date(sourceStats.mtimeMs));
+                            
+                            destIndex[relativePath] = { size: newDestStats.size, mtimeMs: newDestStats.mtimeMs };
+                            if (job.verifyContent) {
+                                if (!sourceHash) { // If copy was triggered by size/existence, hash wasn't calculated yet
+                                    sourceHash = await calculatePartialFileHash(sourcePath);
+                                }
+                                destIndex[relativePath].hash = sourceHash;
+                            }
+                            scheduleSave();
+                        }
+                    } catch (error) {
+                        if (error.code === 'ENOENT') {
+                            // This happens if file was deleted between readdir and stat. Not a critical copy error.
+                            console.warn(`[WARN] Job ${jobId}: Source file disappeared during scan: ${relativePath}. Skipping.`);
+                            totalSourceFiles = Math.max(0, totalSourceFiles - 1); // Adjust total for accuracy
+                        } else {
+                            const newError = { path: relativePath, error: error.message };
+                            copyErrors.push(newError);
+                            const errorMessage = `Failed to process: ${relativePath}. ${error.message}`;
+                            console.error(`[ERROR] Job ${jobId}: ${errorMessage}`);
+                            sendUpdate('Copying', progress, `Error: ${relativePath}`, {
+                                processedFiles,
+                                totalSourceFiles,
+                                errorCount: copyErrors.length,
+                                newError: newError
+                            });
+                        }
+                    }
                 }
             }
         }
 
-        // --- PHASE 3: CLEANUP ---
+        sendUpdate('Copying', 0, `Starting backup of ${totalSourceFiles.toLocaleString()} file(s)...`);
+        await syncDirectory('');
+
+        // --- UNIFIED COMPLETION AND STOP LOGIC ---
         const wasStopped = stopFlags.has(jobId);
         if (wasStopped) {
             console.warn(`[WARN] Job ${jobId} was stopped by the user.`);
@@ -589,18 +705,17 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
 
         sendUpdate('Cleaning', -1, 'Checking for files to delete...');
-        const toDelete = [];
-        for (const destPath of destPathsSet) {
-             if (!sourcePathsSet.has(destPath)) {
-                 const normalizedDestPath = normalizePath(destPath);
-                 // We need to find the original cased path to check if it's a file in destIndex
-                 const originalCasedPath = [...destIndex.keys()].find(k => normalizePath(k).toLowerCase() === normalizedDestPath) || normalizedDestPath;
-                 const isFile = destIndex.has(originalCasedPath);
-                 toDelete.push({ path: originalCasedPath, type: isFile ? 'file' : 'dir' });
-             }
-        }
-        console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items in destination.`);
+        const orphanFiles = calculateOrphanFiles(sourcePaths, destIndex);
+        const allDestDirs = await getAllRelativeDirs(job.destination, jobId);
+        const orphanDirs = allDestDirs
+            .filter(dir => !sourcePaths.has(dir.toLowerCase())) // allDestDirs is already normalized
+            .map(p => ({ path: p, type: 'dir' }));
+            
+        const toDelete = [...orphanFiles, ...orphanDirs];
+        console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items in destination (${orphanFiles.length} files, ${orphanDirs.length} directories).`);
         
+        // Core Decision Logic: Should we auto-cleanup?
+        // Cleanup runs if enabled, there are files to delete, and no copy errors occurred (for safety).
         const shouldAutoCleanup = settings.autoCleanup && toDelete.length > 0 && copyErrors.length === 0;
 
         if (shouldAutoCleanup) {
@@ -613,7 +728,7 @@ ipcMain.on('job:start', async (event, jobId) => {
             
             let finalStatus, finalMessage;
             if (cleanupResult.success) {
-                toDelete.forEach(item => destIndex.delete(item.path)); // remove cleaned files from index
+                toDelete.forEach(item => delete destIndex[item.path]); // remove cleaned files from index
                 finalStatus = wasStopped ? 'Stopped' : 'Done';
                 finalMessage = wasStopped ? 'Job stopped and cleanup complete.' : `Backup and cleanup completed successfully at ${new Date().toLocaleTimeString()}.`;
             } else {
@@ -625,7 +740,7 @@ ipcMain.on('job:start', async (event, jobId) => {
                 ...(copyErrors.length > 0 && { copyErrors }) 
             });
 
-        } else {
+        } else { // No auto-cleanup: either disabled, nothing to delete, or copy errors occurred.
             let finalStatus, finalMessage;
             if (wasStopped) {
                 finalStatus = 'Stopped';
@@ -650,17 +765,22 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
 
     } catch(err) {
-        if (err.message === 'SCAN_STOPPED') {
-             sendUpdate('Stopped', 0, 'Job stopped by user.');
-        } else {
-            console.error(`[ERROR] A critical error occurred in job ${jobId}: ${err.message}\n${err.stack}`);
-            sendUpdate('Error', 0, `A critical error occurred: ${err.message}`, { filesToDelete: [] });
+        console.error(`[ERROR] A critical error occurred in job ${jobId}: ${err.message}\n${err.stack}`);
+        const orphanFiles = calculateOrphanFiles(sourcePaths, destIndex);
+        const allDestDirs = await getAllRelativeDirs(job.destination, jobId).catch(() => []);
+        const orphanDirs = allDestDirs
+            .filter(dir => !sourcePaths.has(dir.toLowerCase()))
+            .map(p => ({ path: p, type: 'dir' }));
+        const toDelete = [...orphanFiles, ...orphanDirs];
+        if (toDelete.length > 0) {
+            console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items that can be cleaned up despite the error.`);
         }
+        sendUpdate('Error', 0, `A critical error occurred: ${err.message}`, { filesToDelete: toDelete });
     } finally {
         if (saveTimeout) clearTimeout(saveTimeout);
-        if (destIndex && destIndex.size > 0 && !stopFlags.has(jobId)) {
+        if (Object.keys(destIndex).length > 0 && !stopFlags.has(jobId)) {
             try {
-                const newIndexData = { destinationPath: job.destination, files: Object.fromEntries(destIndex) };
+                const newIndexData = { destinationPath: job.destination, files: destIndex };
                 await fs.writeFile(tempIndexFilePath, JSON.stringify(newIndexData));
                 await fs.rename(tempIndexFilePath, indexFilePath);
                 console.log(`[INFO] Job ${jobId}: Destination index saved.`);
@@ -670,7 +790,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
 
         runningJobsInMain.delete(jobId);
-        stopFlags.delete(jobId);
+        stopFlags.delete(jobId); // Ensure stop flag is always cleared on exit
         if (runningJobsInMain.size === 0 && powerSaveBlockerId) {
             powerSaveBlocker.stop(powerSaveBlockerId);
             console.log('[INFO] System sleep prevention has been lifted.');
