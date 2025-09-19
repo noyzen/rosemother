@@ -280,7 +280,15 @@ input:checked + .slider:before { transform: translateX(20px); }
 .modal-header .btn-icon { width: 36px; height: 36px; }
 
 #job-form { display: flex; flex-direction: column; overflow: hidden; flex-grow: 1; }
-.form-scroll-content { overflow-y: auto; padding: var(--spacing-lg); }
+.form-scroll-content {
+  overflow-y: auto;
+  padding: var(--spacing-lg);
+  flex-grow: 1;
+  min-height: 0;
+}
+#settings-modal .form-scroll-content {
+  padding-top: 0;
+}
 .modal-actions {
   display: flex; justify-content: flex-end; gap: 12px; margin-top: auto;
   padding: var(--spacing-md) var(--spacing-lg); border-top: 1px solid var(--border-primary); flex-shrink: 0;
@@ -454,11 +462,13 @@ input[type="text"]:focus {
 #settings-modal .modal-content { padding: 0; }
 #settings-modal .modal-header { padding-bottom: var(--spacing-md); }
 #settings-modal .settings-section {
-  padding: 0 var(--spacing-lg) var(--spacing-lg) var(--spacing-lg);
+  padding: 0;
   margin: 0;
   border-bottom: 1px solid var(--border-primary);
 }
-#settings-modal .settings-section:last-child { border-bottom: none; }
+#settings-modal .settings-section:last-child {
+  border-bottom: none;
+}
 .settings-section h3 { margin: 0 0 var(--spacing-md) 0; font-size: 1rem; color: var(--text-secondary); font-weight: 600; padding-top: var(--spacing-lg); }
 .settings-actions { display: flex; gap: 12px; }
 .form-group-row { display: grid; grid-template-columns: 1fr 2fr; align-items: flex-start; gap: var(--spacing-md); padding: var(--spacing-md) 0; }

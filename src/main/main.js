@@ -399,7 +399,7 @@ ipcMain.on('job:start', async (event, jobId) => {
             if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
 
             let scannedFileCount = 0;
-            async function buildFastIndex(relativeDir) {
+            async function buildIndex(relativeDir) {
                 if (stopFlags.has(jobId)) return;
                 const dir = path.join(job.destination, relativeDir);
                 let dirents;
@@ -408,23 +408,26 @@ ipcMain.on('job:start', async (event, jobId) => {
                 for (const dirent of dirents) {
                     if (stopFlags.has(jobId)) return;
                     const relativePath = path.join(relativeDir, dirent.name);
+                    const fullPath = path.join(dir, dirent.name);
                     if (dirent.isDirectory()) {
-                        await buildFastIndex(relativePath);
+                        await buildIndex(relativePath);
                     } else if (dirent.isFile()) {
                         scannedFileCount++;
                         const progress = totalFileCount > 0 ? Math.min((scannedFileCount / totalFileCount) * 100, 100) : -1;
-                        const message = totalFileCount > 0 ? `Indexing: ${scannedFileCount.toLocaleString()} of ${totalFileCount.toLocaleString()}` : `Indexing destination: ${scannedFileCount.toLocaleString()} files...`;
+                        const message = totalFileCount > 0 ? `Hashing: ${scannedFileCount.toLocaleString()} of ${totalFileCount.toLocaleString()}` : `Hashing destination: ${scannedFileCount.toLocaleString()} files...`;
                         sendUpdate('Scanning', progress, message);
 
                         try {
-                            const stats = await fs.stat(path.join(dir, dirent.name));
-                            destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs };
+                            const stats = await fs.stat(fullPath);
+                            const hash = await calculateFileHash(fullPath, jobId);
+                            if (!hash) continue; // Hashing was stopped
+                            destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs, hash: hash };
                             scheduleSave();
                         } catch (err) { logToRenderer('WARN', `Job ${jobId}: Could not scan ${relativePath}: ${err.message}`); }
                     }
                 }
             }
-            await buildFastIndex('');
+            await buildIndex('');
             if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
         }
         
@@ -463,20 +466,19 @@ ipcMain.on('job:start', async (event, jobId) => {
             for (const dirent of dirents) {
                 if (stopFlags.has(jobId)) return;
                 const relativePath = path.join(relativeDir, dirent.name);
-                sourcePaths.add(relativePath); // Add all paths for cleanup logic
+                sourcePaths.add(relativePath);
 
                 const isItemExcluded = job.exclusions && isExcluded(relativePath, job.exclusions);
-
                 if (isItemExcluded) {
-                    if (dirent.isDirectory()) await syncDirectory(relativePath); // Must recurse to populate sourcePaths
-                    continue; // Skip all processing for this excluded item
+                    if (dirent.isDirectory()) await syncDirectory(relativePath);
+                    continue;
                 }
                 
                 const sourcePath = path.join(job.source, relativePath);
                 const destPath = path.join(job.destination, relativePath);
                 
                 if (dirent.isDirectory()) {
-                    try { await fs.mkdir(destPath, { recursive: true }); } catch (e) {}
+                    await fs.mkdir(destPath, { recursive: true }).catch(() => {});
                     await syncDirectory(relativePath);
                 } else if (dirent.isFile()) {
                     processedFiles++;
@@ -484,24 +486,44 @@ ipcMain.on('job:start', async (event, jobId) => {
                     const copyPayload = { processedFiles, totalSourceFiles };
                     
                     try {
+                        sendUpdate('Copying', progress, `Processing: ${relativePath}`, copyPayload);
                         const sourceStats = await fs.stat(sourcePath);
                         const destEntry = destIndex[relativePath];
-                        sendUpdate('Copying', progress, `Processing: ${relativePath}`, copyPayload);
 
-                        if (destEntry && destEntry.size === sourceStats.size && destEntry.mtimeMs === sourceStats.mtimeMs) continue;
+                        if (destEntry && destEntry.size === sourceStats.size && destEntry.mtimeMs === sourceStats.mtimeMs) {
+                            continue;
+                        }
 
                         const sourceHash = await calculateFileHash(sourcePath, jobId);
                         if (!sourceHash) continue;
-                        if (destEntry && destEntry.hash === sourceHash) continue;
+
+                        if (destEntry && destEntry.hash === sourceHash) {
+                            logToRenderer('INFO', `Job ${jobId}: Updating metadata for identical file ${relativePath}`);
+                            await fs.utimes(destPath, new Date(sourceStats.mtimeMs), new Date(sourceStats.mtimeMs));
+                            destIndex[relativePath].mtimeMs = sourceStats.mtimeMs;
+                            destIndex[relativePath].size = sourceStats.size;
+                            scheduleSave();
+                            continue;
+                        }
+
+                        await fs.mkdir(path.dirname(destPath), { recursive: true });
 
                         const movedPath = hashToPathMap[sourceHash];
                         if (movedPath && movedPath !== relativePath) {
                             sendUpdate('Copying', progress, `Moving: ${movedPath} -> ${relativePath}`, copyPayload);
-                            await fs.rename(path.join(job.destination, movedPath), destPath).catch(() => fs.copyFile(sourcePath, destPath));
+                            const oldFullPath = path.join(job.destination, movedPath);
+                            try {
+                                await fs.rename(oldFullPath, destPath);
+                            } catch (err) {
+                                logToRenderer('WARN', `Job ${jobId}: Rename failed (likely cross-device). Falling back to copy+delete for ${movedPath}. Error: ${err.message}`);
+                                await fs.copyFile(sourcePath, destPath);
+                                await fs.rm(oldFullPath, { force: true });
+                            }
                             delete destIndex[movedPath];
                             logToRenderer('INFO', `Job ${jobId}: Detected move for ${relativePath}`);
                         } else {
-                            sendUpdate('Copying', progress, `Copying: ${relativePath}`, copyPayload);
+                            const action = destEntry ? 'Updating' : 'Copying';
+                            sendUpdate('Copying', progress, `${action}: ${relativePath}`, copyPayload);
                             await fs.copyFile(sourcePath, destPath);
                         }
 
@@ -529,7 +551,6 @@ ipcMain.on('job:start', async (event, jobId) => {
 
         if (copyErrors.length > 0) {
             const allErrors = store.get('jobErrors', {});
-            // Append new errors to existing ones for this job
             const existingErrors = allErrors[jobId] || [];
             allErrors[jobId] = [...existingErrors, ...copyErrors];
             store.set('jobErrors', allErrors);
