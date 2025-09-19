@@ -170,10 +170,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const renderJobs = () => {
     const hasJobs = jobs.length > 0;
-    emptyStateEl.classList.toggle('hidden', hasJobs);
     jobsListEl.classList.toggle('hidden', !hasJobs);
     startAllBtn.classList.toggle('hidden', !hasJobs);
     
+    // Fix: Correctly toggle empty state visibility.
+    emptyStateEl.classList.toggle('hidden', jobs.length > 0);
+
     jobsListEl.innerHTML = '';
 
     if (hasJobs) {
@@ -523,7 +525,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const jobId = jobItem.dataset.id;
     
     if (button.classList.contains('btn-start-stop')) {
-        if(runningJobs.has(jobId)) {
+        if (runningJobs.has(jobId)) {
+            // Prevent multiple clicks while waiting for stop confirmation
+            if (jobItem.classList.contains('is-stopping')) return;
+
+            jobItem.classList.add('is-stopping');
+            button.disabled = true;
+            button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Stopping...';
+            button.setAttribute('title', 'Stopping...');
             window.electronAPI.stopJob(jobId);
         } else {
             window.electronAPI.startJob(jobId);
@@ -708,8 +717,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const cleanupBtn = jobEl.querySelector('.btn-cleanup');
     const viewErrorsBtn = jobEl.querySelector('.btn-view-errors');
     
-    const isCounting = (message || '').startsWith('Counting');
-    if (isCounting && progress < 0) {
+    // Check for 'Counting' status specifically for spinner display
+    const isCounting = (status === 'Scanning' && progress < 0);
+    if (isCounting) {
       const textNode = document.createTextNode(` ${message}`);
       const icon = document.createElement('i');
       icon.className = 'fa-solid fa-spinner fa-spin status-spinner';
@@ -728,7 +738,7 @@ document.addEventListener('DOMContentLoaded', () => {
       progressBar.style.width = `${progress}%`;
     }
     
-    const isRunning = ['Scanning', 'Copying', 'Syncing', 'Cleaning'].includes(status);
+    const isRunning = ['Scanning', 'Copying', 'Cleaning'].includes(status);
     jobEl.classList.toggle('is-running', isRunning);
 
     // Reset phase classes
@@ -737,7 +747,17 @@ document.addEventListener('DOMContentLoaded', () => {
     if (status === 'Copying') jobEl.classList.add('is-copying');
     if (status === 'Cleaning') jobEl.classList.add('is-cleaning');
 
-    if (isRunning) {
+    // When a job reaches a final state, remove the 'is-stopping' flag.
+    if (['Error', 'Done', 'DoneWithErrors', 'Stopped'].includes(status)) {
+      jobEl.classList.remove('is-stopping');
+    }
+
+    const isStopping = jobEl.classList.contains('is-stopping');
+    
+    // Update button states based on isRunning or isStopping
+    if (isStopping) {
+      // State is handled by the click handler. Do nothing to the button's appearance.
+    } else if (isRunning) {
       runningJobs.add(jobId);
       startStopBtn.innerHTML = '<i class="fa-solid fa-stop"></i> Stop';
       startStopBtn.setAttribute('title', 'Stop Backup');
@@ -750,6 +770,12 @@ document.addEventListener('DOMContentLoaded', () => {
       startStopBtn.classList.remove('is-stop', 'btn-danger');
       startStopBtn.classList.add('btn-primary');
     }
+
+    // A job is busy if it's running or if a stop command has been issued.
+    const isBusy = isRunning || isStopping;
+    [...jobEl.querySelectorAll('.btn-edit, .btn-delete')].forEach(b => b.disabled = isBusy);
+    startStopBtn.disabled = isStopping;
+    cleanupBtn.disabled = isBusy;
 
     if (status === 'Copying' && payload && payload.eta > 0) {
         statusEta.textContent = formatETA(payload.eta);
@@ -777,10 +803,6 @@ document.addEventListener('DOMContentLoaded', () => {
       statusWarning.classList.add('hidden');
       delete jobErrors[jobId];
     }
-
-    [...jobEl.querySelectorAll('.btn-edit, .btn-delete')].forEach(b => b.disabled = isRunning);
-    startStopBtn.disabled = false;
-    cleanupBtn.disabled = isRunning;
     
     jobEl.classList.toggle('is-error', status === 'Error');
     jobEl.classList.toggle('is-done', status === 'Done');
