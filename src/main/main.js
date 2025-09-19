@@ -33,7 +33,7 @@ let mainWindow;
 
 function logToRenderer(level, message) {
     if (!isLoggingEnabled) return;
-    if (mainWindow && mainWindow.webContents) {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
         mainWindow.webContents.send('log:message', { level, message });
     }
     const levelMap = { INFO: 'log', WARN: 'warn', ERROR: 'error', SUCCESS: 'log' };
@@ -204,7 +204,7 @@ ipcMain.on('job:start', async (event, jobId) => {
     if (!job) return;
 
     const sendUpdate = (status, progress = 0, message = '', payload = {}) => {
-        if (mainWindow && mainWindow.webContents) {
+        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
             mainWindow.webContents.send('job:update', { jobId, status, progress, message, payload });
         }
     };
@@ -214,6 +214,29 @@ ipcMain.on('job:start', async (event, jobId) => {
     await fs.mkdir(indexesPath, { recursive: true });
     const indexFilePath = path.join(indexesPath, `${job.id}.json`);
     const tempIndexFilePath = `${indexFilePath}.tmp`;
+
+    let destIndex = {};
+    
+    // --- Throttled Saving Logic ---
+    let saveTimeout = null;
+    const SAVE_INTERVAL = 3000;
+    const scheduleSave = () => {
+        if (saveTimeout) return; // A save is already scheduled
+        saveTimeout = setTimeout(async () => {
+            saveTimeout = null; // Clear lock so a new save can be scheduled
+            if (stopFlags.has(jobId)) return;
+            try {
+                const indexToSave = {
+                    destinationPath: job.destination,
+                    files: destIndex,
+                };
+                await fs.writeFile(tempIndexFilePath, JSON.stringify(indexToSave));
+            } catch (e) {
+                logToRenderer('WARN', `Job ${jobId}: Periodic index save failed: ${e.message}`);
+            }
+        }, SAVE_INTERVAL);
+    };
+    // --- End Throttled Saving ---
 
     try {
         const allErrors = store.get('jobErrors', {});
@@ -244,7 +267,6 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
 
         const copyErrors = [];
-        let destIndex = {};
         let needsIndexBuild = false;
 
         sendUpdate('Copying', -1, 'Loading destination index...');
@@ -285,6 +307,7 @@ ipcMain.on('job:start', async (event, jobId) => {
                             const stats = await fs.stat(fullPath);
                             // Store only metadata. Hash will be added on-demand.
                             destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs };
+                            scheduleSave();
                         } catch (err) { logToRenderer('WARN', `Job ${jobId}: Could not scan ${relativePath}: ${err.message}`); }
                     }
                 }
@@ -364,6 +387,7 @@ ipcMain.on('job:start', async (event, jobId) => {
                         await fs.utimes(destPath, new Date(sourceStats.mtimeMs), new Date(sourceStats.mtimeMs));
                         destIndex[relativePath] = { size: sourceStats.size, mtimeMs: sourceStats.mtimeMs, hash: sourceHash };
                         hashToPathMap[sourceHash] = relativePath;
+                        scheduleSave();
                     } catch (error) {
                         const errorMessage = `Failed to process: ${relativePath}. ${error.message}`;
                         copyErrors.push({ path: relativePath, error: error.message });
@@ -431,13 +455,14 @@ ipcMain.on('job:start', async (event, jobId) => {
             sendUpdate(finalStatus, 100, finalMessage, payload);
             logToRenderer(finalStatus === 'Done' ? 'SUCCESS' : 'WARN', `Job ${jobId}: ${finalMessage}`);
         }
-    
-        // Atomically save the index with metadata
+        
+        if (saveTimeout) clearTimeout(saveTimeout);
+        // Atomically save the index. Use non-prettified JSON for performance with large file lists.
         const newIndexData = {
             destinationPath: job.destination,
             files: destIndex,
         };
-        await fs.writeFile(tempIndexFilePath, JSON.stringify(newIndexData, null, 2));
+        await fs.writeFile(tempIndexFilePath, JSON.stringify(newIndexData));
         await fs.rename(tempIndexFilePath, indexFilePath);
         logToRenderer('INFO', `Job ${jobId}: Destination index saved.`);
 
