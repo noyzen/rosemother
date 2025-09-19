@@ -66,16 +66,6 @@
             <button type="button" class="btn-browse" data-target="dest-path">Browse...</button>
           </div>
         </div>
-        <div class="form-group-row">
-            <label for="job-cleanup-toggle" class="setting-label">Enable Auto Cleanup</label>
-            <div class="form-group-control">
-                <label class="toggle-switch">
-                    <input type="checkbox" id="job-cleanup-toggle">
-                    <span class="slider"></span>
-                </label>
-                <p class="setting-description">If enabled, automatically delete files from the destination if they are removed from the source.</p>
-            </div>
-        </div>
         <div class="modal-actions">
           <button type="button" id="cancel-job-btn" class="btn btn-secondary">Cancel</button>
           <button type="submit" id="save-job-btn" class="btn btn-primary">Save Job</button>
@@ -138,6 +128,16 @@
       
       <div class="settings-section">
           <h3>Backup Behavior</h3>
+          <div class="form-group-row">
+            <label for="auto-cleanup-toggle" class="setting-label">Enable Auto Cleanup</label>
+            <div class="form-group-control">
+              <label class="toggle-switch">
+                <input type="checkbox" id="auto-cleanup-toggle">
+                <span class="slider"></span>
+              </label>
+              <p class="setting-description">If enabled, automatically delete files from the destination if they are removed from the source. This applies to all jobs.</p>
+            </div>
+          </div>
           <div class="form-group-row">
             <label for="prevent-sleep-toggle" class="setting-label">Prevent System Sleep</label>
             <div class="form-group-control">

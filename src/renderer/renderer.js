@@ -16,7 +16,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const jobNameInput = document.getElementById('job-name');
   const sourcePathInput = document.getElementById('source-path');
   const destPathInput = document.getElementById('dest-path');
-  const jobCleanupToggle = document.getElementById('job-cleanup-toggle');
   
   const confirmModal = document.getElementById('confirm-modal');
   const confirmTitle = document.getElementById('confirm-title');
@@ -33,6 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const closeSettingsBtn = document.getElementById('close-settings-btn');
   const exportJobsBtn = document.getElementById('export-jobs-btn');
   const importJobsBtn = document.getElementById('import-jobs-btn');
+  const autoCleanupToggle = document.getElementById('auto-cleanup-toggle');
   const preventSleepToggle = document.getElementById('prevent-sleep-toggle');
   const shutdownOnCompletionToggle = document.getElementById('shutdown-on-completion-toggle');
 
@@ -42,7 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const cancelShutdownBtn = document.getElementById('cancel-shutdown-btn');
 
   let jobs = [];
-  let appSettings = { loggingEnabled: true, preventSleep: false };
+  let appSettings = { loggingEnabled: true, preventSleep: false, autoCleanup: false };
   let confirmCallback = null;
   let pendingCleanups = {};
   let jobQueue = [];
@@ -197,7 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="job-drag-handle" title="Drag to reorder"><i class="fa-solid fa-grip-vertical"></i></div>
             <div class="job-content">
                 <div class="job-header">
-                    <h3 class="job-name">${job.name || 'Untitled Job'} ${job.autoCleanup ? '<i class="fa-solid fa-broom" title="Auto-cleanup enabled"></i>' : ''}</h3>
+                    <h3 class="job-name">${job.name || 'Untitled Job'}</h3>
                 </div>
 
                 <div class="job-paths-container">
@@ -257,18 +257,21 @@ document.addEventListener('DOMContentLoaded', () => {
     appSettings = {
         loggingEnabled: true,
         preventSleep: false,
+        autoCleanup: false,
         ...storedSettings
     };
     loggingEnabledToggle.checked = appSettings.loggingEnabled;
     preventSleepToggle.checked = appSettings.preventSleep;
-    addLog('INFO', `Settings loaded (Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}).`);
+    autoCleanupToggle.checked = appSettings.autoCleanup;
+    addLog('INFO', `Settings loaded (Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}, Auto Cleanup: ${appSettings.autoCleanup}).`);
   };
 
   const saveSettings = async () => {
     appSettings.loggingEnabled = loggingEnabledToggle.checked;
     appSettings.preventSleep = preventSleepToggle.checked;
+    appSettings.autoCleanup = autoCleanupToggle.checked;
     await window.electronAPI.setSettings(appSettings);
-    addLog('INFO', `Settings saved (Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}).`);
+    addLog('INFO', `Settings saved (Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}, Auto Cleanup: ${appSettings.autoCleanup}).`);
   };
 
   const openJobModal = (job = null) => {
@@ -279,12 +282,10 @@ document.addEventListener('DOMContentLoaded', () => {
       jobNameInput.value = job.name || '';
       sourcePathInput.value = job.source;
       destPathInput.value = job.destination;
-      jobCleanupToggle.checked = job.autoCleanup || false;
     } else {
       modalTitle.textContent = 'New Backup Job';
       jobIdInput.value = '';
       jobNameInput.value = '';
-      jobCleanupToggle.checked = false; // Default for new jobs
     }
     jobModal.classList.remove('hidden');
     jobNameInput.focus();
@@ -407,8 +408,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const newJobData = {
       name: jobNameInput.value.trim(),
       source: sourcePathInput.value,
-      destination: destPathInput.value,
-      autoCleanup: jobCleanupToggle.checked
+      destination: destPathInput.value
     };
 
     if (!newJobData.name) {
@@ -424,6 +424,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (id) { // Editing
       const index = jobs.findIndex(job => job.id === id);
       jobs[index] = { ...jobs[index], ...newJobData };
+      delete jobs[index].autoCleanup;
       addLog('INFO', `Job "${newJobData.name}" has been edited.`);
     } else { // Adding
       const newId = `job_${Date.now()}`;
@@ -623,6 +624,7 @@ document.addEventListener('DOMContentLoaded', () => {
   settingsBtn.addEventListener('click', () => settingsModal.classList.remove('hidden'));
   closeSettingsBtn.addEventListener('click', () => settingsModal.classList.add('hidden'));
   
+  autoCleanupToggle.addEventListener('change', saveSettings);
   preventSleepToggle.addEventListener('change', saveSettings);
 
   exportJobsBtn.addEventListener('click', async () => {
@@ -630,7 +632,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const exportData = {
         version: '1.0.0',
         rosemother_export: true,
-        jobs: jobs.map(({ name, source, destination, autoCleanup }) => ({ name, source, destination, autoCleanup })),
+        jobs: jobs.map(({ name, source, destination }) => ({ name, source, destination })),
     };
     const { success, error } = await window.electronAPI.saveJsonDialog(JSON.stringify(exportData, null, 2));
     if (!success && error !== 'Save dialog canceled.') {
@@ -666,8 +668,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         id: `job_${Date.now()}_${importedCount}`,
                         name: importedJob.name || `Imported Job ${importedCount + 1}`,
                         source: importedJob.source,
-                        destination: importedJob.destination,
-                        autoCleanup: importedJob.autoCleanup || false
+                        destination: importedJob.destination
                     });
                     importedCount++;
                 }
@@ -762,8 +763,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     if (status === 'Done' || status === 'DoneWithErrors') {
       if (payload && payload.filesToDelete && payload.filesToDelete.length > 0) {
-        const job = jobs.find(j => j.id === jobId);
-        if (!job.autoCleanup) { // Only show manual cleanup button if auto cleanup is off
+        if (!appSettings.autoCleanup) { // Only show manual cleanup button if auto cleanup is off
             pendingCleanups[jobId] = payload.filesToDelete;
             cleanupBtn.classList.remove('hidden');
         }

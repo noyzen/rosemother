@@ -12,7 +12,7 @@ const WindowState = require('electron-window-state');
 const Store = require('electron-store');
 
 const store = new Store();
-let isLoggingEnabled = store.get('settings', { loggingEnabled: true, preventSleep: false }).loggingEnabled;
+let isLoggingEnabled = store.get('settings', { loggingEnabled: true, preventSleep: false, autoCleanup: false }).loggingEnabled;
 const stopFlags = new Map();
 const runningJobsInMain = new Set();
 let powerSaveBlockerId = null;
@@ -142,7 +142,7 @@ ipcMain.handle('jobs:get', () => store.get('jobs', []));
 ipcMain.handle('jobs:set', (event, jobs) => store.set('jobs', jobs));
 ipcMain.handle('jobErrors:get', () => store.get('jobErrors', {}));
 ipcMain.handle('jobErrors:set', (event, errors) => store.set('jobErrors', errors));
-ipcMain.handle('settings:get', () => store.get('settings', { loggingEnabled: true, preventSleep: false }));
+ipcMain.handle('settings:get', () => store.get('settings', { loggingEnabled: true, preventSleep: false, autoCleanup: false }));
 ipcMain.handle('settings:set', (event, settings) => {
     if (typeof settings.loggingEnabled !== 'undefined') {
         isLoggingEnabled = settings.loggingEnabled;
@@ -203,6 +203,8 @@ ipcMain.on('job:start', async (event, jobId) => {
     const job = jobs.find(j => j.id === jobId);
     if (!job) return;
 
+    const settings = store.get('settings', { loggingEnabled: true, preventSleep: false, autoCleanup: false });
+
     const sendUpdate = (status, progress = 0, message = '', payload = {}) => {
         if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
             mainWindow.webContents.send('job:update', { jobId, status, progress, message, payload });
@@ -244,7 +246,6 @@ ipcMain.on('job:start', async (event, jobId) => {
         store.set('jobErrors', allErrors);
 
         if (runningJobsInMain.size === 0) {
-            const settings = store.get('settings', {});
             if (settings.preventSleep) {
                 powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension');
                 if (powerSaveBlocker.isStarted(powerSaveBlockerId)) {
@@ -430,7 +431,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         };
         
         let finalMessage;
-        if (job.autoCleanup && toDelete.length > 0 && copyErrors.length === 0) {
+        if (settings.autoCleanup && toDelete.length > 0 && copyErrors.length === 0) {
             sendUpdate(finalStatus, 100, `Auto-cleaning ${toDelete.length} item(s)...`, payload);
             const cleanupResult = await performCleanup(job, toDelete);
             if (cleanupResult.success) {
@@ -446,7 +447,7 @@ ipcMain.on('job:start', async (event, jobId) => {
             if (copyErrors.length > 0) {
                 finalMessage = `Backup finished with ${copyErrors.length} error(s).`;
                 if (toDelete.length > 0) finalMessage += ` ${toDelete.length} item(s) pending cleanup.`;
-                if (job.autoCleanup && toDelete.length > 0) finalMessage += ' Auto-cleanup was skipped due to copy errors.';
+                if (settings.autoCleanup && toDelete.length > 0) finalMessage += ' Auto-cleanup was skipped due to copy errors.';
             } else {
                 finalMessage = toDelete.length > 0
                     ? `Backup complete. ${toDelete.length} item(s) pending cleanup.`
