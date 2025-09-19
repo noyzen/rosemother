@@ -336,15 +336,20 @@ input[type="text"]:focus {
     border: 1px solid var(--border-primary);
     margin-top: var(--spacing-md);
 }
-.setting-description.mini { font-size: 0.75rem; margin-top: var(--spacing-xs); }
+.setting-description.mini { font-size: 0.75rem; margin-top: var(--spacing-xs); margin-bottom: var(--spacing-sm); }
+
+#add-excluded-folder-btn {
+    margin-top: var(--spacing-sm);
+}
 
 .exclusion-input-group { display: flex; gap: var(--spacing-sm); }
 .exclusion-input-group input { flex-grow: 1; }
 .exclusion-list {
-    margin-top: var(--spacing-md);
+    margin-top: var(--spacing-sm);
     display: flex;
     flex-wrap: wrap;
     gap: var(--spacing-sm);
+    min-height: 1.5rem; /* Ensure it doesn't collapse when empty */
 }
 .exclusion-item {
     display: inline-flex;

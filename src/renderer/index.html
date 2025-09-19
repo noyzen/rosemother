@@ -87,13 +87,12 @@
               </div>
               <div id="exclusions-container" class="hidden">
                   <div class="form-group">
-                      <label for="excluded-path-input">Excluded Folder/File Names</label>
-                      <div class="exclusion-input-group">
-                          <input type="text" id="excluded-path-input" placeholder="e.g., node_modules, .git"/>
-                          <button type="button" class="btn btn-secondary btn-sm" id="add-excluded-path-btn">Add</button>
-                      </div>
-                      <p class="setting-description mini">Matches names anywhere in the path.</p>
+                      <label>Excluded Folders</label>
+                      <p class="setting-description mini">Select folders inside your source to exclude them from the backup.</p>
                       <div class="exclusion-list" id="excluded-paths-list"></div>
+                      <button type="button" class="btn btn-secondary btn-sm" id="add-excluded-folder-btn">
+                          <i class="fa-solid fa-folder-plus"></i> Add Folder to Exclude...
+                      </button>
                   </div>
                   <div class="form-group">
                       <label for="excluded-extension-input">Excluded Extensions</label>

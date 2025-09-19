@@ -4,6 +4,8 @@
 
 
 
+
+
 const { app, BrowserWindow, Menu, ipcMain, dialog, powerSaveBlocker } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
@@ -106,6 +108,17 @@ ipcMain.handle('dialog:openDirectory', async () => {
   }
 });
 
+ipcMain.handle('dialog:openDirectoryAt', async (event, defaultPath) => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    defaultPath: defaultPath
+  });
+  if (!canceled) {
+    return filePaths[0];
+  }
+});
+
+
 ipcMain.handle('dialog:saveJson', async (event, content) => {
     const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
         title: 'Export Jobs',
@@ -179,13 +192,15 @@ function isExcluded(relativePath, jobExclusions) {
     if (!jobExclusions || !jobExclusions.enabled) return false;
 
     const lowerCaseRelativePath = relativePath.toLowerCase();
-    const pathParts = lowerCaseRelativePath.split(path.sep);
 
-    // Check excluded paths/names (case-insensitive)
+    // Check excluded paths (case-insensitive)
+    // This now checks if the item's path starts with an excluded path.
     if (jobExclusions.paths && jobExclusions.paths.length > 0) {
-        const lowerCaseExcludedPaths = jobExclusions.paths.map(p => p.toLowerCase());
-        for (const part of pathParts) {
-            if (lowerCaseExcludedPaths.includes(part)) return true;
+        for (const excludedPath of jobExclusions.paths) {
+            const lowerCaseExcludedPath = excludedPath.toLowerCase();
+            if (lowerCaseRelativePath === lowerCaseExcludedPath || lowerCaseRelativePath.startsWith(lowerCaseExcludedPath + path.sep)) {
+                return true;
+            }
         }
     }
 

@@ -21,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const exclusionsContainer = document.getElementById('exclusions-container');
   const excludedPathsList = document.getElementById('excluded-paths-list');
   const excludedExtensionsPathList = document.getElementById('excluded-extensions-list');
+  const addExcludedFolderBtn = document.getElementById('add-excluded-folder-btn');
   
   const confirmModal = document.getElementById('confirm-modal');
   const confirmTitle = document.getElementById('confirm-title');
@@ -552,6 +553,29 @@ document.addEventListener('DOMContentLoaded', () => {
     exclusionsContainer.classList.toggle('hidden', !e.target.checked);
   });
 
+  addExcludedFolderBtn.addEventListener('click', async () => {
+    const sourcePath = sourcePathInput.value;
+    if (!sourcePath) {
+        alert('Please select a Source Folder before adding exclusions.');
+        return;
+    }
+    
+    const selectedPath = await window.electronAPI.openDialogAt(sourcePath);
+    if (selectedPath && selectedPath.startsWith(sourcePath)) {
+        let relativePath = selectedPath.substring(sourcePath.length);
+        // Normalize leading slashes
+        if (relativePath.startsWith('\\') || relativePath.startsWith('/')) {
+            relativePath = relativePath.substring(1);
+        }
+        if (relativePath) {
+           renderExclusionRule(excludedPathsList, relativePath);
+        }
+    } else if (selectedPath) {
+        alert('The excluded folder must be inside the selected Source Folder.');
+    }
+  });
+
+
   const setupExclusionAdder = (inputId, buttonId, listEl) => {
     const input = document.getElementById(inputId);
     const button = document.getElementById(buttonId);
@@ -572,7 +596,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   };
 
-  setupExclusionAdder('excluded-path-input', 'add-excluded-path-btn', excludedPathsList);
   setupExclusionAdder('excluded-extension-input', 'add-excluded-extension-btn', excludedExtensionsPathList);
 
 
