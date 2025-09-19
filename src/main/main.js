@@ -1,11 +1,4 @@
 
-
-
-
-
-
-
-
 const { app, BrowserWindow, Menu, ipcMain, dialog, powerSaveBlocker } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
@@ -293,6 +286,11 @@ ipcMain.on('job:stop', (event, jobId) => {
 });
 
 ipcMain.on('job:start', async (event, jobId) => {
+    if (runningJobsInMain.has(jobId)) {
+        logToRenderer('WARN', `Job ${jobId} is already running. Start request ignored.`);
+        return;
+    }
+
     const jobs = store.get('jobs', []);
     const job = jobs.find(j => j.id === jobId);
     if (!job) return;
@@ -324,9 +322,6 @@ ipcMain.on('job:start', async (event, jobId) => {
     };
 
     try {
-        // Errors are now persistent and only cleared by the user.
-        // This section used to clear errors, but has been removed.
-
         if (runningJobsInMain.size === 0) {
             if (settings.preventSleep) {
                 powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension');
@@ -573,7 +568,6 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
 
         runningJobsInMain.delete(jobId);
-        stopFlags.delete(jobId);
         if (runningJobsInMain.size === 0 && powerSaveBlockerId) {
             powerSaveBlocker.stop(powerSaveBlockerId);
             logToRenderer('INFO', 'System sleep prevention has been lifted.');
