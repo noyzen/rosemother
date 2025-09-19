@@ -216,7 +216,10 @@ input:checked + .slider:before { transform: translateX(20px); }
   flex-wrap: nowrap;
   gap: var(--spacing-md);
   overflow: hidden;
-  height: 1.4rem; /* Stabilized height to prevent resizing */
+  /* More robustly enforce a fixed height to prevent resizing from content changes */
+  height: 1.5rem;
+  min-height: 1.5rem;
+  max-height: 1.5rem;
 }
 .status-text {
   white-space: nowrap;
