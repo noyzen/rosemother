@@ -209,14 +209,14 @@ input:checked + .slider:before { transform: translateX(20px); }
 .job-status {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   font-size: 0.8rem;
   color: var(--text-tertiary);
   margin-bottom: var(--spacing-xs);
   flex-wrap: nowrap;
   gap: var(--spacing-md);
   overflow: hidden;
-  height: 1.2em; /* Prevents vertical resizing */
+  height: 1.4rem; /* Stabilized height to prevent resizing */
 }
 .status-text {
   white-space: nowrap;
