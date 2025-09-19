@@ -185,30 +185,28 @@ function isExcluded(relativePath, jobExclusions) {
     return false;
 }
 
-async function countFiles(startPath, jobId, job = null) {
-    console.log(`[INFO] Job ${jobId}: countFiles started for path: ${startPath}`);
+async function getAllRelativePaths(startPath, jobId, job = null) {
+    const paths = new Set();
     let fileCount = 0;
-    let dirCount = 0;
     const queue = [startPath];
-    const YIELD_THRESHOLD = 500; // Yield to event loop every 500 directories processed
-    
+    const YIELD_THRESHOLD = 500;
+    let processedCount = 0;
+
     while (queue.length > 0) {
         if (stopFlags.has(jobId)) {
-            console.warn(`[WARN] Job ${jobId}: countFiles received stop signal.`);
-            throw new Error('COUNT_STOPPED');
+            throw new Error('SCAN_STOPPED');
         }
         const currentPath = queue.shift();
 
-        dirCount++;
-        if (dirCount % YIELD_THRESHOLD === 0) {
-             await new Promise(resolve => setImmediate(resolve));
+        processedCount++;
+        if (processedCount % YIELD_THRESHOLD === 0) {
+            await new Promise(resolve => setImmediate(resolve));
         }
 
         let dirents;
         try {
             dirents = await fs.readdir(currentPath, { withFileTypes: true });
         } catch (e) {
-            console.warn(`[WARN] Job ${jobId}: countFiles could not read directory ${currentPath}. Error: ${e.message}`);
             continue;
         }
 
@@ -220,6 +218,9 @@ async function countFiles(startPath, jobId, job = null) {
                 continue;
             }
 
+            const normalizedRelativePath = normalizePath(relativePath);
+            paths.add(normalizedRelativePath.toLowerCase()); // Add lowercased for comparison
+
             if (dirent.isDirectory()) {
                 queue.push(fullPath);
             } else if (dirent.isFile()) {
@@ -227,8 +228,7 @@ async function countFiles(startPath, jobId, job = null) {
             }
         }
     }
-    console.log(`[INFO] Job ${jobId}: countFiles finished for path: ${startPath}. Total files: ${fileCount}, Dirs: ${dirCount}.`);
-    return fileCount;
+    return { paths, fileCount };
 }
 
 function robustDelete(fullPath) {
@@ -470,7 +470,7 @@ ipcMain.on('job:start', async (event, jobId) => {
     runningJobsInMain.add(jobId);
     stopFlags.delete(jobId);
     
-    const sourcePaths = new Set();
+    let sourcePaths = null;
     const YIELD_THRESHOLD = 500; // General threshold for yielding to event loop
     const copyErrors = [];
 
@@ -499,14 +499,17 @@ ipcMain.on('job:start', async (event, jobId) => {
         // 2. Always rebuild the index from what's currently on disk for reliability.
         destIndex = {};
         sendUpdate('Scanning', -1, 'Scanning destination for changes...');
-        let totalFileCount = 0;
+        let totalDestFileCount = 0;
         try {
             console.log(`[INFO] Job ${jobId}: Starting to count destination files at ${job.destination}.`);
-            totalFileCount = await countFiles(job.destination, jobId);
+            // We use the new function here too, but just for the count.
+            const destScanResult = await getAllRelativePaths(job.destination, jobId);
+            totalDestFileCount = destScanResult.fileCount;
+
             if (stopFlags.has(jobId)) { throw new Error('COUNT_STOPPED'); }
-            console.log(`[INFO] Job ${jobId}: Finished counting. Found approx ${totalFileCount.toLocaleString()} files in destination.`);
+            console.log(`[INFO] Job ${jobId}: Finished counting. Found approx ${totalDestFileCount.toLocaleString()} files in destination.`);
         } catch (err) {
-            if (err.message === 'COUNT_STOPPED') {
+            if (err.message === 'COUNT_STOPPED' || err.message === 'SCAN_STOPPED') {
                 console.warn(`[WARN] Job ${jobId}: Stop requested during destination file count.`);
                 sendUpdate('Stopped', 0, 'Job stopped by user.');
                 return;
@@ -536,8 +539,8 @@ ipcMain.on('job:start', async (event, jobId) => {
                     if (scannedFileCount % YIELD_THRESHOLD === 0) {
                         await new Promise(resolve => setImmediate(resolve));
                     }
-                    const progress = totalFileCount > 0 ? Math.min((scannedFileCount / totalFileCount) * 100, 100) : -1;
-                    const message = totalFileCount > 0 ? `Scanning destination: ${scannedFileCount.toLocaleString()} of ${totalFileCount.toLocaleString()}` : `Scanning destination: ${scannedFileCount.toLocaleString()} files...`;
+                    const progress = totalDestFileCount > 0 ? Math.min((scannedFileCount / totalDestFileCount) * 100, 100) : -1;
+                    const message = totalDestFileCount > 0 ? `Scanning destination: ${scannedFileCount.toLocaleString()} of ${totalDestFileCount.toLocaleString()}` : `Scanning destination: ${scannedFileCount.toLocaleString()} files...`;
                     sendUpdate('Scanning', progress, message);
 
                     try {
@@ -559,20 +562,24 @@ ipcMain.on('job:start', async (event, jobId) => {
         await buildIndex('');
         if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
         
-        sendUpdate('Scanning', -1, 'Counting source files...');
+        // --- NEW: Pre-scan source to get a complete list of valid paths and count ---
+        sendUpdate('Scanning', -1, 'Scanning source files...');
         let totalSourceFiles = 0;
         try {
-            console.log(`[INFO] Job ${jobId}: Starting to count source files at ${job.source}.`);
-            totalSourceFiles = await countFiles(job.source, jobId, job); // Pass job for exclusions
-            if (stopFlags.has(jobId)) { throw new Error('COUNT_STOPPED'); } // Re-check
-            console.log(`[INFO] Job ${jobId}: Finished counting. Found approx ${totalSourceFiles.toLocaleString()} files in source.`);
+            console.log(`[INFO] Job ${jobId}: Starting to scan and count source files at ${job.source}.`);
+            const scanResult = await getAllRelativePaths(job.source, jobId, job);
+            if (stopFlags.has(jobId)) { throw new Error('SCAN_STOPPED'); }
+            sourcePaths = scanResult.paths;
+            totalSourceFiles = scanResult.fileCount;
+            console.log(`[INFO] Job ${jobId}: Finished scanning. Found approx ${totalSourceFiles.toLocaleString()} files in source.`);
         } catch (err) {
-            if (err.message === 'COUNT_STOPPED') { 
-                console.warn(`[WARN] Job ${jobId}: Stop requested during source file count.`);
-                sendUpdate('Stopped', 0, 'Job stopped by user.'); 
-                return; 
+            if (err.message === 'SCAN_STOPPED') {
+                console.warn(`[WARN] Job ${jobId}: Stop requested during source file scan.`);
+                sendUpdate('Stopped', 0, 'Job stopped by user.');
+                return;
             }
-            console.warn(`[WARN] Job ${jobId}: Could not count source files. Progress will be indeterminate.`);
+            console.warn(`[WARN] Job ${jobId}: Could not scan source files. Progress will be indeterminate.`);
+            throw new Error(`Failed to scan source directory: ${err.message}`);
         }
 
         if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
@@ -594,12 +601,12 @@ ipcMain.on('job:start', async (event, jobId) => {
                 }
                 
                 const currentRelativePath = path.join(relativeDir, dirent.name);
-                const relativePath = normalizePath(currentRelativePath); // Normalize path
-                sourcePaths.add(relativePath.toLowerCase());
                 
-                if (job.exclusions && isExcluded(currentRelativePath, job.exclusions)) { // isExcluded handles its own normalization
+                if (job.exclusions && isExcluded(currentRelativePath, job.exclusions)) {
                     continue; // Skip excluded files and directories
                 }
+
+                const relativePath = normalizePath(currentRelativePath);
                 
                 const sourcePath = path.join(job.source, currentRelativePath);
                 const destPath = path.join(job.destination, currentRelativePath);
@@ -615,7 +622,6 @@ ipcMain.on('job:start', async (event, jobId) => {
                     try {
                         sendUpdate('Copying', progress, `Checking: ${relativePath}`, copyPayload);
                         const sourceStats = await fs.stat(sourcePath);
-                        // Lookup in destIndex must also use normalized path.
                         const destEntry = destIndex[relativePath];
 
                         let needsCopy = false;
@@ -766,14 +772,17 @@ ipcMain.on('job:start', async (event, jobId) => {
 
     } catch(err) {
         console.error(`[ERROR] A critical error occurred in job ${jobId}: ${err.message}\n${err.stack}`);
-        const orphanFiles = calculateOrphanFiles(sourcePaths, destIndex);
-        const allDestDirs = await getAllRelativeDirs(job.destination, jobId).catch(() => []);
-        const orphanDirs = allDestDirs
-            .filter(dir => !sourcePaths.has(dir.toLowerCase()))
-            .map(p => ({ path: p, type: 'dir' }));
-        const toDelete = [...orphanFiles, ...orphanDirs];
-        if (toDelete.length > 0) {
-            console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items that can be cleaned up despite the error.`);
+        let toDelete = [];
+        if (sourcePaths) {
+            const orphanFiles = calculateOrphanFiles(sourcePaths, destIndex);
+            const allDestDirs = await getAllRelativeDirs(job.destination, jobId).catch(() => []);
+            const orphanDirs = allDestDirs
+                .filter(dir => !sourcePaths.has(dir.toLowerCase()))
+                .map(p => ({ path: p, type: 'dir' }));
+            toDelete = [...orphanFiles, ...orphanDirs];
+            if (toDelete.length > 0) {
+                console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items that can be cleaned up despite the error.`);
+            }
         }
         sendUpdate('Error', 0, `A critical error occurred: ${err.message}`, { filesToDelete: toDelete });
     } finally {
