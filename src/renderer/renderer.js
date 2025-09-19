@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const logListContainer = document.getElementById('log-list-container');
   const logSearchInput = document.getElementById('log-search-input');
   const loggingEnabledToggle = document.getElementById('logging-enabled-toggle');
+  const refreshLogBtn = document.getElementById('refresh-log-btn');
   
   // Settings Modal Elements
   const settingsModal = document.getElementById('settings-modal');
@@ -128,6 +129,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 1500);
   });
   
+  refreshLogBtn.addEventListener('click', () => renderLogs(logSearchInput.value));
+
   logSearchInput.addEventListener('input', () => renderLogs(logSearchInput.value));
   
   loggingEnabledToggle.addEventListener('change', e => {
