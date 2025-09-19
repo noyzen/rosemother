@@ -4,10 +4,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const addJobBtn = document.getElementById('add-job-btn');
   const startAllBtn = document.getElementById('start-all-btn');
   const batchCleanupBtn = document.getElementById('batch-cleanup-btn');
-  const exportJobsBtn = document.getElementById('export-jobs-btn');
-  const importJobsBtn = document.getElementById('import-jobs-btn');
-  const autoCleanupToggle = document.getElementById('auto-cleanup-toggle');
   const logBtn = document.getElementById('log-btn');
+  
+  // Header buttons
+  const settingsBtn = document.getElementById('settings-btn');
 
   // Modals
   const jobModal = document.getElementById('job-modal');
@@ -26,9 +26,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const logListContainer = document.getElementById('log-list-container');
   const logSearchInput = document.getElementById('log-search-input');
   const loggingEnabledToggle = document.getElementById('logging-enabled-toggle');
+  
+  // Settings Modal Elements
+  const settingsModal = document.getElementById('settings-modal');
+  const closeSettingsBtn = document.getElementById('close-settings-btn');
+  const exportJobsBtn = document.getElementById('export-jobs-btn');
+  const importJobsBtn = document.getElementById('import-jobs-btn');
+  const autoCleanupToggle = document.getElementById('auto-cleanup-toggle');
+  const preventSleepToggle = document.getElementById('prevent-sleep-toggle');
+  const cpuUsageSelect = document.getElementById('cpu-usage-select');
 
   let jobs = [];
-  let appSettings = { autoCleanup: false, loggingEnabled: true };
+  let appSettings = { autoCleanup: false, loggingEnabled: true, preventSleep: false, cpuUsage: 'normal' };
   let confirmCallback = null;
   let pendingCleanups = {};
   let jobQueue = [];
@@ -113,11 +122,10 @@ document.addEventListener('DOMContentLoaded', () => {
   logSearchInput.addEventListener('input', () => renderLogs(logSearchInput.value));
   
   loggingEnabledToggle.addEventListener('change', e => {
-    const isEnabled = e.target.checked;
-    appSettings.loggingEnabled = isEnabled;
+    appSettings.loggingEnabled = e.target.checked;
     saveSettings();
 
-    if (isEnabled) {
+    if (appSettings.loggingEnabled) {
         addLog('WARN', 'Logging has been enabled.');
     } else {
         const msg = 'Logging has been disabled. New events will not be recorded.';
@@ -133,13 +141,38 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   // --- End Logging System ---
 
+  const formatETA = (ms) => {
+    if (ms <= 0 || !isFinite(ms)) {
+      return '';
+    }
+    const seconds = Math.floor((ms / 1000) % 60);
+    const minutes = Math.floor((ms / (1000 * 60)) % 60);
+    const hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
+    const days = Math.floor(ms / (1000 * 60 * 60 * 24));
+
+    if (days > 0) return `~${days}d ${hours}h left`;
+    if (hours > 0) return `~${hours}h ${minutes}m left`;
+    if (minutes > 0) return `~${minutes}m ${seconds}s left`;
+    return `~${seconds}s left`;
+  };
+
   const renderJobs = () => {
-    jobsListEl.innerHTML = '';
     const hasJobs = jobs.length > 0;
-    emptyStateEl.classList.toggle('hidden', hasJobs);
+    emptyStateEl.classList.toggle('hidden', !hasJobs);
     jobsListEl.classList.toggle('hidden', !hasJobs);
     startAllBtn.classList.toggle('hidden', !hasJobs);
-    exportJobsBtn.classList.toggle('hidden', !hasJobs);
+    
+    // To avoid re-rendering everything on drag/drop, we can be smarter,
+    // but for this app's scale, a full re-render is simple and effective.
+    const activeState = new Map();
+    document.querySelectorAll('.job-item').forEach(el => {
+        activeState.set(el.dataset.id, {
+            innerHTML: el.innerHTML,
+            classes: el.className
+        });
+    });
+
+    jobsListEl.innerHTML = '';
 
     if (hasJobs) {
       jobs.forEach(job => {
@@ -147,35 +180,48 @@ document.addEventListener('DOMContentLoaded', () => {
         const jobEl = document.createElement('div');
         jobEl.className = 'job-item';
         jobEl.dataset.id = job.id;
-        jobEl.innerHTML = `
-          <div class="job-paths">
-            <div class="path-display">
-              <i class="fa-regular fa-folder-open"></i>
-              <span class="path-text" title="${job.source}">${job.source}</span>
-            </div>
-            <i class="fa-solid fa-arrow-right-long path-arrow"></i>
-            <div class="path-display">
-              <i class="fa-solid fa-server"></i>
-              <span class="path-text" title="${job.destination}">${job.destination}</span>
-            </div>
-          </div>
-          <div class="job-details">
-            <div class="job-status">
-              <span class="status-text">${hasPendingCleanup ? `${pendingCleanups[job.id].length} item(s) pending cleanup.` : 'Idle'}</span>
-              <span class="status-warning hidden"></span>
-              <div class="progress-bar-container">
-                <div class="progress-bar"></div>
-              </div>
-            </div>
-            <div class="job-actions">
-              <button class="btn-icon btn-view-errors hidden" aria-label="View Errors"><i class="fa-solid fa-triangle-exclamation"></i></button>
-              <button class="btn-icon btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" aria-label="Cleanup Files"><i class="fa-solid fa-broom"></i></button>
-              <button class="btn-icon btn-start-stop" aria-label="Start Backup"><i class="fa-solid fa-play"></i></button>
-              <button class="btn-icon btn-edit" aria-label="Edit Job"><i class="fa-solid fa-pencil"></i></button>
-              <button class="btn-icon btn-delete" aria-label="Delete Job"><i class="fa-solid fa-trash-can"></i></button>
-            </div>
-          </div>
-        `;
+        jobEl.draggable = true;
+
+        const previousState = activeState.get(job.id);
+        if (previousState && !isBatchRunning && runningJobs.size === 0) {
+             jobEl.innerHTML = previousState.innerHTML;
+             jobEl.className = previousState.classes;
+        } else {
+            jobEl.innerHTML = `
+                <div class="job-drag-handle" title="Drag to reorder"><i class="fa-solid fa-grip-vertical"></i></div>
+                <div class="job-content">
+                    <div class="job-paths">
+                        <div class="path-display">
+                            <i class="fa-regular fa-folder-open source-icon"></i>
+                            <span class="path-text" title="${job.source}">${job.source}</span>
+                        </div>
+                        <div class="path-arrow-container">
+                            <i class="fa-solid fa-arrow-down-long path-arrow"></i>
+                        </div>
+                        <div class="path-display">
+                            <i class="fa-solid fa-server dest-icon"></i>
+                            <span class="path-text" title="${job.destination}">${job.destination}</span>
+                        </div>
+                    </div>
+                    <div class="job-details">
+                        <div class="job-status">
+                            <span class="status-text">${hasPendingCleanup ? `${pendingCleanups[job.id].length} item(s) pending cleanup.` : 'Idle'}</span>
+                            <span class="status-eta hidden"></span>
+                            <span class="status-warning hidden"></span>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar"></div>
+                            </div>
+                        </div>
+                        <div class="job-actions">
+                            <button class="btn-icon btn-view-errors hidden" aria-label="View Errors"><i class="fa-solid fa-triangle-exclamation"></i></button>
+                            <button class="btn-icon btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" aria-label="Cleanup Files"><i class="fa-solid fa-broom"></i></button>
+                            <button class="btn-icon btn-start-stop" aria-label="Start Backup"><i class="fa-solid fa-play"></i></button>
+                            <button class="btn-icon btn-edit" aria-label="Edit Job"><i class="fa-solid fa-pencil"></i></button>
+                            <button class="btn-icon btn-delete" aria-label="Delete Job"><i class="fa-solid fa-trash-can"></i></button>
+                        </div>
+                    </div>
+                </div>`;
+        }
         jobsListEl.appendChild(jobEl);
       });
     }
@@ -199,16 +245,24 @@ document.addEventListener('DOMContentLoaded', () => {
     appSettings = {
         autoCleanup: false,
         loggingEnabled: true,
+        preventSleep: false,
+        cpuUsage: 'normal',
         ...storedSettings
     };
     autoCleanupToggle.checked = appSettings.autoCleanup;
     loggingEnabledToggle.checked = appSettings.loggingEnabled;
-    addLog('INFO', `Settings loaded (Auto Cleanup: ${appSettings.autoCleanup}, Logging: ${appSettings.loggingEnabled}).`);
+    preventSleepToggle.checked = appSettings.preventSleep;
+    cpuUsageSelect.value = appSettings.cpuUsage;
+    addLog('INFO', `Settings loaded (Auto Cleanup: ${appSettings.autoCleanup}, Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}).`);
   };
 
   const saveSettings = async () => {
+    appSettings.autoCleanup = autoCleanupToggle.checked;
+    appSettings.loggingEnabled = loggingEnabledToggle.checked;
+    appSettings.preventSleep = preventSleepToggle.checked;
+    appSettings.cpuUsage = cpuUsageSelect.value;
     await window.electronAPI.setSettings(appSettings);
-    addLog('INFO', `Settings saved (Auto Cleanup: ${appSettings.autoCleanup}, Logging: ${appSettings.loggingEnabled}).`);
+    addLog('INFO', `Settings saved (Auto Cleanup: ${appSettings.autoCleanup}, Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}).`);
   };
 
   const updateBatchCleanupButton = () => {
@@ -366,6 +420,82 @@ document.addEventListener('DOMContentLoaded', () => {
     saveJobs();
     closeJobModal();
   });
+
+  // --- Drag and Drop Logic ---
+  let draggedId = null;
+
+  jobsListEl.addEventListener('dragstart', e => {
+    const target = e.target.closest('.job-item');
+    if (target) {
+        draggedId = target.dataset.id;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', draggedId);
+        // Delay adding class to allow browser to capture drag image
+        setTimeout(() => {
+            target.classList.add('dragging');
+        }, 0);
+    }
+  });
+
+  jobsListEl.addEventListener('dragend', e => {
+    const target = e.target.closest('.job-item');
+    if (target) {
+        target.classList.remove('dragging');
+    }
+    document.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(el => {
+        el.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+    draggedId = null;
+  });
+
+  jobsListEl.addEventListener('dragover', e => {
+      e.preventDefault();
+      const target = e.target.closest('.job-item');
+
+      document.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(el => {
+        el.classList.remove('drag-over-top', 'drag-over-bottom');
+      });
+
+      if (target && target.dataset.id !== draggedId) {
+          const rect = target.getBoundingClientRect();
+          const isAfter = e.clientY > rect.top + rect.height / 2;
+          target.classList.toggle('drag-over-bottom', isAfter);
+          target.classList.toggle('drag-over-top', !isAfter);
+      }
+  });
+
+  jobsListEl.addEventListener('drop', async e => {
+    e.preventDefault();
+    document.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(el => {
+        el.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+
+    const droppedOnElement = e.target.closest('.job-item');
+    if (!droppedOnElement || droppedOnElement.dataset.id === draggedId) {
+        return;
+    }
+
+    const draggedIndex = jobs.findIndex(j => j.id === draggedId);
+    const targetIndex = jobs.findIndex(j => j.id === droppedOnElement.dataset.id);
+
+    if (draggedIndex === -1 || targetIndex === -1) return;
+    
+    const [draggedItem] = jobs.splice(draggedIndex, 1);
+    const rect = droppedOnElement.getBoundingClientRect();
+    const isAfter = e.clientY > rect.top + rect.height / 2;
+    
+    const newTargetIndex = jobs.findIndex(j => j.id === droppedOnElement.dataset.id);
+
+    if (isAfter) {
+        jobs.splice(newTargetIndex + 1, 0, draggedItem);
+    } else {
+        jobs.splice(newTargetIndex, 0, draggedItem);
+    }
+    
+    await window.electronAPI.setJobs(jobs);
+    addLog('INFO', 'Job order changed.');
+    renderJobs();
+  });
   
   jobsListEl.addEventListener('click', async e => {
     const button = e.target.closest('button');
@@ -451,10 +581,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  autoCleanupToggle.addEventListener('change', (e) => {
-    appSettings.autoCleanup = e.target.checked;
-    saveSettings();
-  });
+  // --- Settings Modal ---
+  settingsBtn.addEventListener('click', () => settingsModal.classList.remove('hidden'));
+  closeSettingsBtn.addEventListener('click', () => settingsModal.classList.add('hidden'));
+  
+  autoCleanupToggle.addEventListener('change', saveSettings);
+  preventSleepToggle.addEventListener('change', saveSettings);
+  cpuUsageSelect.addEventListener('change', saveSettings);
+
 
   exportJobsBtn.addEventListener('click', async () => {
     addLog('INFO', 'Attempting to export jobs...');
@@ -529,6 +663,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const statusText = jobEl.querySelector('.status-text');
+    const statusEta = jobEl.querySelector('.status-eta');
     const statusWarning = jobEl.querySelector('.status-warning');
     const progressBar = jobEl.querySelector('.progress-bar');
     const startStopBtn = jobEl.querySelector('.btn-start-stop');
@@ -551,6 +686,13 @@ document.addEventListener('DOMContentLoaded', () => {
       startStopBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
       startStopBtn.setAttribute('aria-label', 'Start Backup');
       startStopBtn.classList.remove('is-stop');
+    }
+
+    if (status === 'Copying' && payload && payload.eta > 0) {
+        statusEta.textContent = formatETA(payload.eta);
+        statusEta.classList.remove('hidden');
+    } else {
+        statusEta.classList.add('hidden');
     }
     
     if (payload && payload.copyErrors && payload.copyErrors.length > 0) {
