@@ -793,69 +793,62 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!jobEl) return;
 
     activeJobStatus = message || status;
-    
-    // --- Update UI elements for the active job ---
-    const statusText = jobEl.querySelector('.status-text');
-    const statusCount = jobEl.querySelector('.status-count');
-    const statusEta = jobEl.querySelector('.status-eta');
-    const progressBar = jobEl.querySelector('.progress-bar');
-    
-    statusText.textContent = activeJobStatus;
-
     const isFinalState = ['Error', 'Done', 'DoneWithErrors', 'Stopped'].includes(status);
-    
-    if (isFinalState) {
-      if (payload?.filesToDelete?.length > 0) {
-          const showCleanupButton = !appSettings.autoCleanup || status !== 'Done';
-          if (showCleanupButton) {
-              pendingCleanups[jobId] = payload.filesToDelete;
-          }
+
+    // --- Targeted DOM Update for running job to prevent animation stutter ---
+    if (!isFinalState) {
+      const statusText = jobEl.querySelector('.status-text');
+      const statusCount = jobEl.querySelector('.status-count');
+      const progressBar = jobEl.querySelector('.progress-bar');
+      
+      statusText.textContent = activeJobStatus;
+
+      if (progress < 0) {
+        progressBar.style.width = '100%';
+        progressBar.classList.add('indeterminate');
+      } else {
+        progressBar.classList.remove('indeterminate');
+        progressBar.style.width = `${progress}%`;
       }
-      if (payload?.copyErrors) {
-          jobErrors[jobId] = payload.copyErrors;
+
+      jobEl.classList.remove('is-scanning', 'is-copying', 'is-cleaning', 'is-done', 'is-error', 'is-warning');
+      if (status === 'Scanning') jobEl.classList.add('is-scanning');
+      if (status === 'Copying') jobEl.classList.add('is-copying');
+      if (status === 'Cleaning') jobEl.classList.add('is-cleaning');
+
+      if (status === 'Copying' && payload && payload.totalSourceFiles > 0) {
+          statusCount.textContent = `${payload.processedFiles.toLocaleString()} of ${payload.totalSourceFiles.toLocaleString()}`;
+          statusCount.classList.remove('hidden');
+      } else {
+          statusCount.classList.add('hidden');
       }
-    }
-
-    if (progress < 0) {
-      progressBar.style.width = '100%';
-      progressBar.classList.add('indeterminate');
-    } else {
-      progressBar.classList.remove('indeterminate');
-      progressBar.style.width = `${progress}%`;
-    }
-
-    jobEl.classList.remove('is-scanning', 'is-copying', 'is-cleaning', 'is-done', 'is-error', 'is-warning');
-    if (status === 'Scanning') jobEl.classList.add('is-scanning');
-    if (status === 'Copying') jobEl.classList.add('is-copying');
-    if (status === 'Cleaning') jobEl.classList.add('is-cleaning');
-    if (status === 'Done') jobEl.classList.add('is-done');
-    if (['Error', 'DoneWithErrors'].includes(status)) jobEl.classList.add('is-error');
-
-    if (status === 'Copying' && payload && payload.totalSourceFiles > 0) {
-        statusCount.textContent = `${payload.processedFiles.toLocaleString()} of ${payload.totalSourceFiles.toLocaleString()}`;
-        statusCount.classList.remove('hidden');
-    } else {
-        statusCount.classList.add('hidden');
+      return; // Exit after targeted update, no full re-render
     }
     
-    // --- State Transition Logic ---
-    if (isFinalState) {
-        activeJobId = null;
-        activeJobStatus = null;
-        if (isBatchRunning) {
-            setTimeout(processJobQueue, 500);
-        } else {
-            // Set a transient status for the completed job
-            const job = jobs.find(j => j.id === jobId);
-            if (job) {
-                job.lastStatusMessage = message;
-                job.lastStatusUntil = Date.now() + 8000;
-            }
-            // Re-render to unlock UI
-            setTimeout(renderJobs, 500); 
+    // --- Full Re-render Logic for final states ---
+    if (payload?.filesToDelete?.length > 0) {
+        const showCleanupButton = !appSettings.autoCleanup || status !== 'Done';
+        if (showCleanupButton) {
+            pendingCleanups[jobId] = payload.filesToDelete;
         }
+    }
+    if (payload?.copyErrors) {
+        jobErrors[jobId] = payload.copyErrors;
+    }
+    
+    activeJobId = null;
+    activeJobStatus = null;
+    if (isBatchRunning) {
+        setTimeout(processJobQueue, 500);
     } else {
-        renderJobs(); // Re-render to update things like error counts in real-time
+        // Set a transient status for the completed job
+        const job = jobs.find(j => j.id === jobId);
+        if (job) {
+            job.lastStatusMessage = message;
+            job.lastStatusUntil = Date.now() + 8000;
+        }
+        // Re-render to unlock UI
+        setTimeout(renderJobs, 500); 
     }
   });
   
