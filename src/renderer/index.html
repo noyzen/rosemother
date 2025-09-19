@@ -21,9 +21,6 @@
         <button id="start-all-btn" class="btn btn-primary" aria-label="Start All Jobs">
           <i class="fa-solid fa-play-circle"></i> Start All
         </button>
-        <button id="batch-cleanup-btn" class="btn btn-danger hidden" aria-label="Cleanup All Pending Jobs">
-          <i class="fa-solid fa-broom"></i> Batch Cleanup
-        </button>
         <div class="action-separator"></div>
         <button id="settings-btn" class="btn btn-secondary" aria-label="Open Settings">
             <i class="fa-solid fa-cog"></i> Settings
@@ -68,6 +65,16 @@
             <input type="text" id="dest-path" placeholder="Select a destination folder..." readonly required />
             <button type="button" class="btn-browse" data-target="dest-path">Browse...</button>
           </div>
+        </div>
+        <div class="form-group-row">
+            <label for="job-cleanup-toggle" class="setting-label">Enable Auto Cleanup</label>
+            <div class="form-group-control">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="job-cleanup-toggle">
+                    <span class="slider"></span>
+                </label>
+                <p class="setting-description">If enabled, automatically delete files from the destination if they are removed from the source.</p>
+            </div>
         </div>
         <div class="modal-actions">
           <button type="button" id="cancel-job-btn" class="btn btn-secondary">Cancel</button>
@@ -131,16 +138,6 @@
       
       <div class="settings-section">
           <h3>Backup Behavior</h3>
-          <div class="form-group-row">
-            <label for="auto-cleanup-toggle" class="setting-label">Enable Auto Cleanup</label>
-            <div class="form-group-control">
-              <label class="toggle-switch">
-                <input type="checkbox" id="auto-cleanup-toggle">
-                <span class="slider"></span>
-              </label>
-              <p class="setting-description">Automatically delete files from the destination that no longer exist in the source after a successful backup.</p>
-            </div>
-          </div>
           <div class="form-group-row">
             <label for="prevent-sleep-toggle" class="setting-label">Prevent System Sleep</label>
             <div class="form-group-control">

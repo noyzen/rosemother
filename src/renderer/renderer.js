@@ -3,7 +3,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const emptyStateEl = document.getElementById('empty-state');
   const addJobBtn = document.getElementById('add-job-btn');
   const startAllBtn = document.getElementById('start-all-btn');
-  const batchCleanupBtn = document.getElementById('batch-cleanup-btn');
   const logBtn = document.getElementById('log-btn');
   
   // Header buttons
@@ -17,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const jobNameInput = document.getElementById('job-name');
   const sourcePathInput = document.getElementById('source-path');
   const destPathInput = document.getElementById('dest-path');
+  const jobCleanupToggle = document.getElementById('job-cleanup-toggle');
   
   const confirmModal = document.getElementById('confirm-modal');
   const confirmTitle = document.getElementById('confirm-title');
@@ -33,7 +33,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const closeSettingsBtn = document.getElementById('close-settings-btn');
   const exportJobsBtn = document.getElementById('export-jobs-btn');
   const importJobsBtn = document.getElementById('import-jobs-btn');
-  const autoCleanupToggle = document.getElementById('auto-cleanup-toggle');
   const preventSleepToggle = document.getElementById('prevent-sleep-toggle');
   const shutdownOnCompletionToggle = document.getElementById('shutdown-on-completion-toggle');
 
@@ -43,7 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const cancelShutdownBtn = document.getElementById('cancel-shutdown-btn');
 
   let jobs = [];
-  let appSettings = { autoCleanup: false, loggingEnabled: true, preventSleep: false };
+  let appSettings = { loggingEnabled: true, preventSleep: false };
   let confirmCallback = null;
   let pendingCleanups = {};
   let jobQueue = [];
@@ -198,7 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="job-drag-handle" title="Drag to reorder"><i class="fa-solid fa-grip-vertical"></i></div>
             <div class="job-content">
                 <div class="job-header">
-                    <h3 class="job-name">${job.name || 'Untitled Job'}</h3>
+                    <h3 class="job-name">${job.name || 'Untitled Job'} ${job.autoCleanup ? '<i class="fa-solid fa-broom" title="Auto-cleanup enabled"></i>' : ''}</h3>
                 </div>
 
                 <div class="job-paths-container">
@@ -245,7 +244,6 @@ document.addEventListener('DOMContentLoaded', () => {
         jobsListEl.appendChild(jobEl);
       });
     }
-    updateBatchCleanupButton();
   };
 
   const saveJobs = async () => {
@@ -257,28 +255,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const loadSettings = async () => {
     const storedSettings = await window.electronAPI.getSettings();
     appSettings = {
-        autoCleanup: false,
         loggingEnabled: true,
         preventSleep: false,
         ...storedSettings
     };
-    autoCleanupToggle.checked = appSettings.autoCleanup;
     loggingEnabledToggle.checked = appSettings.loggingEnabled;
     preventSleepToggle.checked = appSettings.preventSleep;
-    addLog('INFO', `Settings loaded (Auto Cleanup: ${appSettings.autoCleanup}, Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}).`);
+    addLog('INFO', `Settings loaded (Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}).`);
   };
 
   const saveSettings = async () => {
-    appSettings.autoCleanup = autoCleanupToggle.checked;
     appSettings.loggingEnabled = loggingEnabledToggle.checked;
     appSettings.preventSleep = preventSleepToggle.checked;
     await window.electronAPI.setSettings(appSettings);
-    addLog('INFO', `Settings saved (Auto Cleanup: ${appSettings.autoCleanup}, Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}).`);
-  };
-
-  const updateBatchCleanupButton = () => {
-    const hasPending = Object.values(pendingCleanups).some(files => files.length > 0);
-    batchCleanupBtn.classList.toggle('hidden', !hasPending);
+    addLog('INFO', `Settings saved (Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}).`);
   };
 
   const openJobModal = (job = null) => {
@@ -289,10 +279,12 @@ document.addEventListener('DOMContentLoaded', () => {
       jobNameInput.value = job.name || '';
       sourcePathInput.value = job.source;
       destPathInput.value = job.destination;
+      jobCleanupToggle.checked = job.autoCleanup || false;
     } else {
       modalTitle.textContent = 'New Backup Job';
       jobIdInput.value = '';
       jobNameInput.value = '';
+      jobCleanupToggle.checked = false; // Default for new jobs
     }
     jobModal.classList.remove('hidden');
     jobNameInput.focus();
@@ -415,7 +407,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const newJobData = {
       name: jobNameInput.value.trim(),
       source: sourcePathInput.value,
-      destination: destPathInput.value
+      destination: destPathInput.value,
+      autoCleanup: jobCleanupToggle.checked
     };
 
     if (!newJobData.name) {
@@ -626,29 +619,10 @@ document.addEventListener('DOMContentLoaded', () => {
     processJobQueue();
   });
   
-  batchCleanupBtn.addEventListener('click', async () => {
-    const totalFiles = Object.values(pendingCleanups).reduce((sum, files) => sum + files.length, 0);
-    const confirmed = await showConfirm(
-        'Confirm Batch Cleanup',
-        `Permanently delete a total of ${totalFiles} item(s) across all jobs? This cannot be undone.`,
-        'danger',
-        pendingCleanups
-    );
-    if (confirmed) {
-        addLog('INFO', `Starting batch cleanup for ${Object.keys(pendingCleanups).length} jobs.`);
-        Object.entries(pendingCleanups).forEach(([jobId, files]) => {
-            if (files.length > 0) {
-                window.electronAPI.cleanupJob({ jobId, files });
-            }
-        });
-    }
-  });
-
   // --- Settings Modal ---
   settingsBtn.addEventListener('click', () => settingsModal.classList.remove('hidden'));
   closeSettingsBtn.addEventListener('click', () => settingsModal.classList.add('hidden'));
   
-  autoCleanupToggle.addEventListener('change', saveSettings);
   preventSleepToggle.addEventListener('change', saveSettings);
 
   exportJobsBtn.addEventListener('click', async () => {
@@ -656,7 +630,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const exportData = {
         version: '1.0.0',
         rosemother_export: true,
-        jobs: jobs.map(({ name, source, destination }) => ({ name, source, destination })),
+        jobs: jobs.map(({ name, source, destination, autoCleanup }) => ({ name, source, destination, autoCleanup })),
     };
     const { success, error } = await window.electronAPI.saveJsonDialog(JSON.stringify(exportData, null, 2));
     if (!success && error !== 'Save dialog canceled.') {
@@ -692,7 +666,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         id: `job_${Date.now()}_${importedCount}`,
                         name: importedJob.name || `Imported Job ${importedCount + 1}`,
                         source: importedJob.source,
-                        destination: importedJob.destination
+                        destination: importedJob.destination,
+                        autoCleanup: importedJob.autoCleanup || false
                     });
                     importedCount++;
                 }
@@ -728,9 +703,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const viewErrorsBtn = jobEl.querySelector('.btn-view-errors');
     
     statusText.textContent = message || status;
-    progressBar.style.width = `${progress}%`;
     
-    const isRunning = ['Scanning', 'Copying', 'Syncing'].includes(status);
+    if (progress < 0) { // Indeterminate state
+      progressBar.style.width = '100%';
+      progressBar.classList.add('indeterminate');
+    } else {
+      progressBar.classList.remove('indeterminate');
+      progressBar.style.width = `${progress}%`;
+    }
+    
+    const isRunning = ['Scanning', 'Copying', 'Syncing', 'Cleaning'].includes(status);
     jobEl.classList.toggle('is-running', isRunning);
 
     if (isRunning) {
@@ -780,13 +762,15 @@ document.addEventListener('DOMContentLoaded', () => {
     
     if (status === 'Done' || status === 'DoneWithErrors') {
       if (payload && payload.filesToDelete && payload.filesToDelete.length > 0) {
-        pendingCleanups[jobId] = payload.filesToDelete;
-        cleanupBtn.classList.remove('hidden');
+        const job = jobs.find(j => j.id === jobId);
+        if (!job.autoCleanup) { // Only show manual cleanup button if auto cleanup is off
+            pendingCleanups[jobId] = payload.filesToDelete;
+            cleanupBtn.classList.remove('hidden');
+        }
       } else {
         delete pendingCleanups[jobId];
         cleanupBtn.classList.add('hidden');
       }
-      updateBatchCleanupButton();
     }
 
     if (['Error', 'Done', 'DoneWithErrors', 'Stopped'].includes(status)) {
@@ -816,7 +800,6 @@ document.addEventListener('DOMContentLoaded', () => {
      const jobEl = document.querySelector(`.job-item[data-id="${jobId}"]`);
      if (jobEl) {
         delete pendingCleanups[jobId];
-        updateBatchCleanupButton();
         
         const statusText = jobEl.querySelector('.status-text');
         const cleanupBtn = jobEl.querySelector('.btn-cleanup');
