@@ -1,11 +1,19 @@
-# Hello Electron
+# Rosemother Backup Utility
 
-Cross-platform Hello World Electron app with custom titlebar, disabled menu, window state persistence, and packaging via electron-builder.
+A simple, powerful, and cross-platform file backup utility built with Electron.
+
+## Features
+- Create and manage multiple backup jobs.
+- Define a source and destination folder for each job.
+- Differential backup: only copies new or modified files, skipping unchanged ones.
+- Post-backup sync: option to delete files from the destination that no longer exist in the source.
+- Real-time progress tracking for each job.
+- Clean, modern dark-theme UI.
+- Job configurations are persisted across app sessions.
 
 ## Scripts
-- npm run electron:dev — Run the app in development
-- npm run electorn:build — Alias to build (typo preserved per request)
-- npm run electron:build — Build installers (AppImage on Linux, NSIS exe on Windows)
+- `npm run electron:dev` — Run the app in development mode.
+- `npm run electron:build` — Build installers for your platform (AppImage for Linux, NSIS for Windows).
 
 ## Setup
 ```
@@ -19,14 +27,5 @@ npm run electron:dev
 
 ## Build
 ```
-# Linux AppImage
-npm run electron:build
-
-# Windows exe (on Windows or with proper cross-compile setup)
 npm run electron:build
 ```
-
-Notes:
-- Default OS menubar is removed. Custom titlebar works on Linux and Windows.
-- Window size and position persist across runs using electron-window-state.
-- App is offline/portable and uses no network by default.

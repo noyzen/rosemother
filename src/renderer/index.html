@@ -5,26 +5,70 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; script-src 'self';" />
-  <title>Hello Electron</title>
-  <!-- Font Awesome (packaged locally) -->
+  <title>Rosemother</title>
   <link rel="stylesheet" href="../../fonts/all.min.css" />
-  <!-- App styles (includes scrollbar styles) -->
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="content">
-    <div class="welcome-card">
-      <div class="hero-icon">
-        <i class="fa-solid fa-atom"></i>
+  <div id="app-container">
+    <header id="app-header">
+      <h1><i class="fa-solid fa-shield-heart"></i> Rosemother</h1>
+      <button id="add-job-btn" class="btn-primary" aria-label="Add New Backup Job">
+        <i class="fa-solid fa-plus"></i> New Job
+      </button>
+    </header>
+
+    <main id="main-content">
+      <div id="jobs-list"></div>
+      <div id="empty-state" class="hidden">
+        <div class="empty-icon"><i class="fa-solid fa-folder-plus"></i></div>
+        <h2>No Backup Jobs</h2>
+        <p>Click "New Job" to create your first backup.</p>
       </div>
-      <h1 id="hello">...</h1>
-      <p id="desc">...</p>
-      <div class="platform-info">
-        <i class="fa-solid fa-desktop"></i>
-        <p><span id="platform-label"></span>: <span id="platform"></span></p>
+    </main>
+  </div>
+
+  <!-- Job Add/Edit Modal -->
+  <div id="job-modal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <h2 id="modal-title">New Backup Job</h2>
+      <form id="job-form">
+        <input type="hidden" id="job-id-input" />
+        <div class="form-group">
+          <label for="source-path">Source Folder</label>
+          <div class="path-input-group">
+            <input type="text" id="source-path" placeholder="Select a source folder..." readonly required />
+            <button type="button" class="btn-browse" data-target="source-path">Browse...</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="dest-path">Destination Folder</label>
+          <div class="path-input-group">
+            <input type="text" id="dest-path" placeholder="Select a destination folder..." readonly required />
+            <button type="button" class="btn-browse" data-target="dest-path">Browse...</button>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="cancel-job-btn" class="btn-secondary">Cancel</button>
+          <button type="submit" id="save-job-btn" class="btn-primary">Save Job</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Delete Confirmation Modal -->
+   <div id="confirm-modal" class="modal-overlay hidden">
+    <div class="modal-content confirm-dialog">
+      <h2 id="confirm-title">Confirm Action</h2>
+      <p id="confirm-message">Are you sure?</p>
+      <div id="confirm-file-list" class="hidden"></div>
+      <div class="modal-actions">
+        <button type="button" id="confirm-cancel-btn" class="btn-secondary">Cancel</button>
+        <button type="button" id="confirm-ok-btn" class="btn-danger">OK</button>
       </div>
     </div>
   </div>
+
   <script src="renderer.js"></script>
 </body>
 </html>

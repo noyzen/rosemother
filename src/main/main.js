@@ -1,11 +1,12 @@
-const { app, BrowserWindow, Menu, nativeTheme } = require('electron');
+const { app, BrowserWindow, Menu, nativeTheme, ipcMain, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs/promises');
+const crypto = require('crypto');
 const WindowState = require('electron-window-state');
+const Store = require('electron-store');
 
-// Disable hardware acceleration for better compatibility on some VMs (optional)
-// app.disableHardwareAcceleration();
+const store = new Store();
 
-// Ensure single instance
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
@@ -21,7 +22,6 @@ if (!gotTheLock) {
 let mainWindow;
 
 function createWindow() {
-  // Load previous window state with fallback to defaults
   const mainWindowState = WindowState({
     defaultWidth: 1000,
     defaultHeight: 700
@@ -32,11 +32,10 @@ function createWindow() {
     y: mainWindowState.y,
     width: mainWindowState.width,
     height: mainWindowState.height,
-    minWidth: 600,
-    minHeight: 400,
+    minWidth: 800,
+    minHeight: 600,
     icon: path.join(__dirname, '../../appicon.png'),
-    // Use OS default frame (frame: true is default)
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1e1e1e' : '#ffffff',
+    backgroundColor: '#121212',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -45,41 +44,148 @@ function createWindow() {
     }
   });
 
-  // Let windowState manager watch and save state
   mainWindowState.manage(mainWindow);
-
-  // Remove the default menu entirely
   Menu.setApplicationMenu(null);
-
-  // Load index.html
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 
-  // Optional: Open devtools in dev mode
-  if (!app.isPackaged) {
-    // mainWindow.webContents.openDevTools({ mode: 'detach' });
-  }
-
-  // Allow toggling devtools with Ctrl+Shift+I on all platforms
   mainWindow.webContents.on('before-input-event', (event, input) => {
     const isCtrlOrCmd = process.platform === 'darwin' ? input.meta : input.control;
     if (isCtrlOrCmd && input.shift && input.key.toLowerCase() === 'i') {
-      if (mainWindow.webContents.isDevToolsOpened()) {
-        mainWindow.webContents.closeDevTools();
-      } else {
-        mainWindow.webContents.openDevTools({ mode: 'detach' });
-      }
+      mainWindow.webContents.isDevToolsOpened()
+        ? mainWindow.webContents.closeDevTools()
+        : mainWindow.webContents.openDevTools({ mode: 'detach' });
       event.preventDefault();
     }
   });
 }
 
 app.on('ready', createWindow);
-
-app.on('window-all-closed', () => {
-  // quit on all platforms for this simple app
-  app.quit();
-});
-
+app.on('window-all-closed', () => app.quit());
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+// IPC Handlers
+ipcMain.handle('dialog:openDirectory', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory']
+  });
+  if (!canceled) {
+    return filePaths[0];
+  }
+});
+
+ipcMain.handle('jobs:get', () => store.get('jobs', []));
+ipcMain.handle('jobs:set', (event, jobs) => store.set('jobs', jobs));
+
+// Backup Logic
+async function getFiles(dir) {
+    const files = new Map();
+    try {
+        const dirents = await fs.readdir(dir, { withFileTypes: true, recursive: true });
+        for (const dirent of dirents) {
+            if (dirent.isFile()) {
+                const fullPath = path.join(dirent.path, dirent.name);
+                const relativePath = path.relative(dir, fullPath);
+                const stats = await fs.stat(fullPath);
+                files.set(relativePath, { size: stats.size, mtime: stats.mtimeMs });
+            }
+        }
+    } catch (error) {
+        if (error.code !== 'ENOENT') console.error(`Error reading directory ${dir}:`, error);
+    }
+    return files;
+}
+
+ipcMain.on('job:start', async (event, jobId) => {
+    const jobs = store.get('jobs', []);
+    const job = jobs.find(j => j.id === jobId);
+    if (!job) return;
+
+    const sendUpdate = (status, progress = 0, message = '') => {
+        mainWindow.webContents.send('job:update', { jobId, status, progress, message });
+    };
+
+    try {
+        await fs.access(job.source);
+        await fs.access(job.destination);
+    } catch (err) {
+        sendUpdate('Error', 0, `Path not found: ${err.path}`);
+        return;
+    }
+
+    sendUpdate('Scanning', 0, 'Scanning source and destination folders...');
+    const [sourceFiles, destFiles] = await Promise.all([getFiles(job.source), getFiles(job.destination)]);
+
+    const toCopy = [];
+    let totalCopySize = 0;
+    for (const [relativePath, sourceStat] of sourceFiles.entries()) {
+        const destStat = destFiles.get(relativePath);
+        if (!destStat || destStat.size !== sourceStat.size || destStat.mtime !== sourceStat.mtime) {
+            toCopy.push(relativePath);
+            totalCopySize += sourceStat.size;
+        }
+    }
+
+    let copiedSize = 0;
+    for (let i = 0; i < toCopy.length; i++) {
+        const relativePath = toCopy[i];
+        const sourcePath = path.join(job.source, relativePath);
+        const destPath = path.join(job.destination, relativePath);
+        
+        sendUpdate(
+            'Copying',
+            totalCopySize > 0 ? (copiedSize / totalCopySize) * 100 : 0,
+            `Copying file ${i + 1} of ${toCopy.length}: ${relativePath}`
+        );
+
+        try {
+            await fs.mkdir(path.dirname(destPath), { recursive: true });
+            await fs.copyFile(sourcePath, destPath);
+            const sourceStat = sourceFiles.get(relativePath);
+            if (sourceStat) {
+                copiedSize += sourceStat.size;
+            }
+        } catch (error) {
+            sendUpdate('Error', 0, `Failed to copy: ${relativePath}. ${error.message}`);
+            return;
+        }
+    }
+
+    sendUpdate('Syncing', 100, 'Checking for files to delete...');
+    const toDelete = [];
+    for (const relativePath of destFiles.keys()) {
+        if (!sourceFiles.has(relativePath)) {
+            toDelete.push(relativePath);
+        }
+    }
+
+    if (toDelete.length > 0) {
+        const userChoice = await ipcMain.handle('job:confirm-delete', { jobId, files: toDelete });
+        if (userChoice.confirmed) {
+            for (const relativePath of toDelete) {
+                const destPath = path.join(job.destination, relativePath);
+                try {
+                    await fs.unlink(destPath);
+                } catch (error) {
+                     console.error(`Failed to delete ${destPath}:`, error);
+                }
+            }
+            // Simple empty directory cleanup
+            try {
+                const destDirs = Array.from(destFiles.keys()).map(f => path.dirname(f)).sort((a,b) => b.length - a.length);
+                for(const dir of [...new Set(destDirs)]){
+                    const fullDirPath = path.join(job.destination, dir);
+                    const filesInDir = await fs.readdir(fullDirPath);
+                    if(filesInDir.length === 0){
+                        await fs.rmdir(fullDirPath);
+                    }
+                }
+            } catch(e) {
+                console.error("Could not prune empty directories", e);
+            }
+        }
+    }
+
+    sendUpdate('Done', 100, `Backup completed successfully at ${new Date().toLocaleTimeString()}.`);
 });
