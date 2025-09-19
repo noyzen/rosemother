@@ -209,18 +209,30 @@ function isExcluded(relativePath, jobExclusions) {
 }
 
 async function countFiles(startPath, jobId, job = null) {
+    logToRenderer('INFO', `Job ${jobId}: countFiles started for path: ${startPath}`);
     let fileCount = 0;
+    let dirCount = 0;
     const queue = [startPath];
+    const LOG_INTERVAL = 500; // Log every 500 directories
 
     while (queue.length > 0) {
         if (stopFlags.has(jobId)) {
+            logToRenderer('WARN', `Job ${jobId}: countFiles received stop signal.`);
             throw new Error('COUNT_STOPPED');
         }
         const currentPath = queue.shift();
+
+        // Periodically log progress
+        dirCount++;
+        if (dirCount % LOG_INTERVAL === 0) {
+            logToRenderer('INFO', `Job ${jobId}: countFiles progress - Dirs processed: ${dirCount}, Queue size: ${queue.length}. Next to process: ${currentPath}`);
+        }
+
         let dirents;
         try {
             dirents = await fs.readdir(currentPath, { withFileTypes: true });
         } catch (e) {
+            logToRenderer('WARN', `Job ${jobId}: countFiles could not read directory ${currentPath}. Error: ${e.message}`);
             continue;
         }
 
@@ -239,6 +251,7 @@ async function countFiles(startPath, jobId, job = null) {
             }
         }
     }
+    logToRenderer('INFO', `Job ${jobId}: countFiles finished for path: ${startPath}. Total files: ${fileCount}, Dirs: ${dirCount}.`);
     return fileCount;
 }
 
@@ -370,10 +383,16 @@ ipcMain.on('job:start', async (event, jobId) => {
             sendUpdate('Scanning', -1, 'Counting destination files...');
             let totalFileCount = 0;
             try {
+                logToRenderer('INFO', `Job ${jobId}: Starting to count destination files at ${job.destination}.`);
                 totalFileCount = await countFiles(job.destination, jobId);
-                logToRenderer('INFO', `Job ${jobId}: Found approx ${totalFileCount.toLocaleString()} files in destination.`);
+                if (stopFlags.has(jobId)) { throw new Error('COUNT_STOPPED'); } // Re-check after long operation
+                logToRenderer('INFO', `Job ${jobId}: Finished counting. Found approx ${totalFileCount.toLocaleString()} files in destination.`);
             } catch (err) {
-                if (err.message === 'COUNT_STOPPED') { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
+                if (err.message === 'COUNT_STOPPED') {
+                    logToRenderer('WARN', `Job ${jobId}: Stop requested during destination file count.`);
+                    sendUpdate('Stopped', 0, 'Job stopped by user.');
+                    return;
+                }
                 logToRenderer('WARN', `Job ${jobId}: Could not count dest files. Progress indeterminate. Error: ${err.message}`);
             }
 
@@ -417,9 +436,16 @@ ipcMain.on('job:start', async (event, jobId) => {
         sendUpdate('Scanning', -1, 'Counting source files...');
         let totalSourceFiles = 0;
         try {
+            logToRenderer('INFO', `Job ${jobId}: Starting to count source files at ${job.source}.`);
             totalSourceFiles = await countFiles(job.source, jobId, job); // Pass job for exclusions
+            if (stopFlags.has(jobId)) { throw new Error('COUNT_STOPPED'); } // Re-check
+            logToRenderer('INFO', `Job ${jobId}: Finished counting. Found approx ${totalSourceFiles.toLocaleString()} files in source.`);
         } catch (err) {
-            if (err.message === 'COUNT_STOPPED') { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
+            if (err.message === 'COUNT_STOPPED') { 
+                logToRenderer('WARN', `Job ${jobId}: Stop requested during source file count.`);
+                sendUpdate('Stopped', 0, 'Job stopped by user.'); 
+                return; 
+            }
             logToRenderer('WARN', `Job ${jobId}: Could not count source files. Progress will be indeterminate.`);
         }
 
