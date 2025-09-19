@@ -1,0 +1,174 @@
+/* Global styles */
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #121212; --fg: #eaeaea; --titlebar: #1c1c1c; --titlebar-fg: #ddd; --btn-hover: rgba(255,255,255,0.08); --scrollbar: #2a2a2a; --scrollbar-thumb: #3a3a3a; --scrollbar-thumb-hover: #4a4a4a; --frame-border: #2f2f2f; }
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #ffffff; --fg: #222; --titlebar: #f2f2f2; --titlebar-fg: #222; --btn-hover: rgba(0,0,0,0.06); --scrollbar: #e5e5e5; --scrollbar-thumb: #c9c9c9; --scrollbar-thumb-hover: #b5b5b5; --frame-border: #d0d0d0; }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Ubuntu, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;
+}
+
+/* App window border overlay */
+.window-border {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--frame-border);
+  z-index: 2000;
+  transform: translateZ(0);
+}
+body.maximized .window-border { display: none; }
+
+/* Custom styled dark scrollbars */
+/* WebKit-based (Chromium) */
+*::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+*::-webkit-scrollbar-track { background: var(--scrollbar); }
+*::-webkit-scrollbar-thumb { background-color: var(--scrollbar-thumb); border-radius: 8px; border: 2px solid var(--scrollbar); }
+*::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-thumb-hover); }
+
+/* Firefox */
+* { scrollbar-color: var(--scrollbar-thumb) var(--scrollbar); scrollbar-width: thin; }
+
+/* Custom titlebar */
+#titlebar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 36px;
+  background: var(--titlebar);
+  color: var(--titlebar-fg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 1000;
+  border-bottom: none;
+}
+
+.drag-region {
+  -webkit-app-region: drag;
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding-inline-start: 12px;
+}
+.window-title {
+  font-size: 13px;
+  opacity: 0.9;
+  transform: translateY(2px);
+}
+.window-controls {
+  display: flex;
+  gap: 0;
+  padding: 0;
+  height: 100%;
+}
+.window-controls button {
+  -webkit-app-region: no-drag;
+  width: 36px; height: 36px;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 0;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.window-controls button:hover { background: var(--btn-hover); }
+.window-controls #close-btn:hover { background: #e81123; color: white; }
+.window-controls button i {
+  line-height: 1;
+  vertical-align: middle;
+  transform: translateY(1px);
+}
+
+#content {
+  padding: 36px 20px 20px 20px; /* leave room for titlebar */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  text-align: center;
+}
+
+/* --- Welcome Page Redesign --- */
+.welcome-card {
+  max-width: 580px;
+  padding: 40px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.hero-icon {
+  font-size: 3.5rem; /* 56px */
+  color: var(--fg);
+  opacity: 0.4;
+  margin-bottom: 24px;
+}
+
+#hello {
+  margin: 0;
+  font-size: 2.25rem; /* 36px */
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+#desc {
+  margin: 8px 0 0 0;
+  line-height: 1.7;
+  opacity: 0.7;
+  max-width: 450px;
+}
+
+.platform-info {
+  margin: 24px 0 0 0;
+  font-size: 0.8rem;
+  opacity: 0.6;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 99px; /* pill shape */
+  background: var(--btn-hover);
+  border: 1px solid var(--frame-border);
+}
+
+.platform-info p {
+  margin: 0;
+  line-height: 1;
+}
+/* --- End Welcome Page Redesign --- */
+
+/* --- Font Inheritance --- */
+button {
+  font-family: inherit;
+}
+
+/* --- Text Selection --- */
+/* Disable text selection on UI elements for a native app-like feel */
+body, h1, p, span, .window-title {
+  -webkit-user-select: none; /* Safari */
+  -moz-user-select: none;    /* Firefox */
+  -ms-user-select: none;     /* IE */
+  user-select: none;         /* Standard */
+}
+
+/* Re-enable text selection for form fields and editable content */
+input, textarea, [contenteditable="true"] {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}

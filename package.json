@@ -1,0 +1,54 @@
+{
+  "name": "hello-electron",
+  "version": "1.0.0",
+  "description": "Hello World Electron app with custom titlebar and window state persistence",
+  "main": "src/main/main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "electron:dev": "electron .",
+    "electron:build": "electron-builder",
+    "electorn:build": "npm run electron:build"
+  },
+  "build": {
+    "appId": "com.example.hello-electron",
+    "productName": "Hello Electron",
+    "files": [
+      "src/**/*",
+      "fonts/**/*",
+      "appicon.png",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build"
+    },
+    "asar": true,
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility",
+      "icon": "appicon.png"
+    },
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "icon": "appicon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": false
+    }
+  },
+  "devDependencies": {
+    "electron": "^31.3.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "electron-window-state": "^5.0.3"
+  }
+}

@@ -1,11 +1,32 @@
-<div align="center">
+# Hello Electron
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+Cross-platform Hello World Electron app with custom titlebar, disabled menu, window state persistence, and packaging via electron-builder.
 
-  <h1>Built with AI Studio</h2>
+## Scripts
+- npm run electron:dev — Run the app in development
+- npm run electorn:build — Alias to build (typo preserved per request)
+- npm run electron:build — Build installers (AppImage on Linux, NSIS exe on Windows)
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+## Setup
+```
+npm install
+```
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## Run
+```
+npm run electron:dev
+```
 
-</div>
+## Build
+```
+# Linux AppImage
+npm run electron:build
+
+# Windows exe (on Windows or with proper cross-compile setup)
+npm run electron:build
+```
+
+Notes:
+- Default OS menubar is removed. Custom titlebar works on Linux and Windows.
+- Window size and position persist across runs using electron-window-state.
+- App is offline/portable and uses no network by default.
