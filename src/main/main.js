@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, nativeTheme, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, nativeTheme } = require('electron');
 const path = require('path');
 const WindowState = require('electron-window-state');
 
@@ -35,9 +35,7 @@ function createWindow() {
     minWidth: 600,
     minHeight: 400,
     icon: path.join(__dirname, '../../appicon.png'),
-    frame: false, // custom frame
-    titleBarStyle: 'hidden', // macOS-like hidden title bar area
-    titleBarOverlay: false,
+    // Use OS default frame (frame: true is default)
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#1e1e1e' : '#ffffff',
     webPreferences: {
       nodeIntegration: false,
@@ -49,14 +47,6 @@ function createWindow() {
 
   // Let windowState manager watch and save state
   mainWindowState.manage(mainWindow);
-
-  // Forward maximize state changes to renderer
-  mainWindow.on('maximize', () => {
-    mainWindow.webContents.send('window:maximize-changed', true);
-  });
-  mainWindow.on('unmaximize', () => {
-    mainWindow.webContents.send('window:maximize-changed', false);
-  });
 
   // Remove the default menu entirely
   Menu.setApplicationMenu(null);
@@ -84,29 +74,6 @@ function createWindow() {
 }
 
 app.on('ready', createWindow);
-
-// IPC handlers for window controls
-ipcMain.handle('window:minimize', () => {
-  if (mainWindow) mainWindow.minimize();
-});
-
-ipcMain.handle('window:maximize', () => {
-  if (!mainWindow) return false;
-  if (mainWindow.isMaximized()) {
-    mainWindow.unmaximize();
-  } else {
-    mainWindow.maximize();
-  }
-  return mainWindow.isMaximized();
-});
-
-ipcMain.handle('window:close', () => {
-  if (mainWindow) mainWindow.close();
-});
-
-ipcMain.handle('window:isMaximized', () => {
-  return mainWindow ? mainWindow.isMaximized() : false;
-});
 
 app.on('window-all-closed', () => {
   // quit on all platforms for this simple app
