@@ -33,6 +33,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let pendingCleanups = {};
   let jobQueue = [];
   let isBatchRunning = false;
+  let jobErrors = {};
+  let runningJobs = new Set();
   
   // --- Logging System ---
   let logs = [];
@@ -160,13 +162,15 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="job-details">
             <div class="job-status">
               <span class="status-text">${hasPendingCleanup ? `${pendingCleanups[job.id].length} item(s) pending cleanup.` : 'Idle'}</span>
+              <span class="status-warning hidden"></span>
               <div class="progress-bar-container">
                 <div class="progress-bar"></div>
               </div>
             </div>
             <div class="job-actions">
+              <button class="btn-icon btn-view-errors hidden" aria-label="View Errors"><i class="fa-solid fa-triangle-exclamation"></i></button>
               <button class="btn-icon btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" aria-label="Cleanup Files"><i class="fa-solid fa-broom"></i></button>
-              <button class="btn-icon btn-start" aria-label="Start Backup"><i class="fa-solid fa-play"></i></button>
+              <button class="btn-icon btn-start-stop" aria-label="Start Backup"><i class="fa-solid fa-play"></i></button>
               <button class="btn-icon btn-edit" aria-label="Edit Job"><i class="fa-solid fa-pencil"></i></button>
               <button class="btn-icon btn-delete" aria-label="Delete Job"><i class="fa-solid fa-trash-can"></i></button>
             </div>
@@ -227,30 +231,56 @@ document.addEventListener('DOMContentLoaded', () => {
   };
   
   const closeJobModal = () => jobModal.classList.add('hidden');
+  
+  const showCopyErrorsModal = async (jobId) => {
+    const errors = jobErrors[jobId] || [];
+    if (errors.length === 0) return;
 
-  const showConfirm = (title, message, okClass = 'danger', cleanupData = null) => {
+    await showConfirm(
+        `Copy Errors (${errors.length})`,
+        `The following files failed to copy during the backup process:`,
+        'info',
+        { type: 'copyErrors', errors }
+    );
+  };
+
+  const showConfirm = (title, message, okClass = 'danger', data = null) => {
     return new Promise(resolve => {
         confirmTitle.textContent = title;
         confirmMessage.textContent = message;
         confirmFileList.innerHTML = '';
 
-        if(cleanupData) {
+        if(data) {
             confirmFileList.classList.remove('hidden');
             const list = document.createElement('ul');
             
-            if (Array.isArray(cleanupData)) { // Single job
-                 cleanupData.slice(0, 100).forEach(file => {
+            if (data.type === 'copyErrors') {
+                data.errors.slice(0, 100).forEach(err => {
+                    const item = document.createElement('li');
+                    item.className = 'confirm-error-item';
+                    item.innerHTML = `
+                        <span class="confirm-error-path">${err.path}</span>
+                        <span class="confirm-error-reason">${err.error}</span>`;
+                    list.appendChild(item);
+                });
+                if (data.errors.length > 100) {
+                    const item = document.createElement('li');
+                    item.textContent = `...and ${data.errors.length - 100} more errors.`;
+                    list.appendChild(item);
+                }
+            } else if (Array.isArray(data)) { // Single job cleanup
+                 data.slice(0, 100).forEach(file => {
                     const item = document.createElement('li');
                     item.textContent = file.path;
                     list.appendChild(item);
                 });
-                if (cleanupData.length > 100) {
+                if (data.length > 100) {
                     const item = document.createElement('li');
-                    item.textContent = `...and ${cleanupData.length - 100} more items.`;
+                    item.textContent = `...and ${data.length - 100} more items.`;
                     list.appendChild(item);
                 }
-            } else { // Batch object
-                 Object.entries(cleanupData).forEach(([jobId, files]) => {
+            } else { // Batch cleanup
+                 Object.entries(data).forEach(([jobId, files]) => {
                     if (files.length === 0) return;
                     const job = jobs.find(j => j.id === jobId);
                     const jobName = job ? `${job.source.split(/[\\/]/).pop()} → ${job.destination.split(/[\\/]/).pop()}` : 'Unknown Job';
@@ -344,8 +374,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const jobItem = e.target.closest('.job-item');
     const jobId = jobItem.dataset.id;
     
-    if (button.classList.contains('btn-start')) {
-        window.electronAPI.startJob(jobId);
+    if (button.classList.contains('btn-start-stop')) {
+        if(runningJobs.has(jobId)) {
+            window.electronAPI.stopJob(jobId);
+        } else {
+            window.electronAPI.startJob(jobId);
+        }
+    } else if (button.classList.contains('btn-view-errors')) {
+        showCopyErrorsModal(jobId);
     } else if (button.classList.contains('btn-edit')) {
         const job = jobs.find(j => j.id === jobId);
         openJobModal(job);
@@ -354,6 +390,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (confirmed) {
             jobs = jobs.filter(j => j.id !== jobId);
             delete pendingCleanups[jobId];
+            delete jobErrors[jobId];
             addLog('WARN', `Job ${jobId} has been deleted.`);
             saveJobs();
         }
@@ -484,44 +521,84 @@ document.addEventListener('DOMContentLoaded', () => {
   window.electronAPI.onJobUpdate(data => {
     const { jobId, status, progress, message, payload } = data;
     const jobEl = document.querySelector(`.job-item[data-id="${jobId}"]`);
-    if (jobEl) {
-        const statusText = jobEl.querySelector('.status-text');
-        const progressBar = jobEl.querySelector('.progress-bar');
-        const startBtn = jobEl.querySelector('.btn-start');
-        const cleanupBtn = jobEl.querySelector('.btn-cleanup');
-        
-        statusText.textContent = message || status;
-        progressBar.style.width = `${progress}%`;
-        
-        const isRunning = ['Scanning', 'Copying', 'Syncing'].includes(status);
-        [startBtn, ...jobEl.querySelectorAll('.btn-edit, .btn-delete, .btn-cleanup')].forEach(b => b.disabled = isRunning);
-        jobEl.classList.toggle('is-running', isRunning);
-        jobEl.classList.toggle('is-error', status === 'Error');
-        jobEl.classList.toggle('is-done', status === 'Done');
+    if (!jobEl) return;
+    
+    if (payload && payload.errorType === 'PATH_ERROR') {
+      showConfirm('Job Error', message, 'info');
+      return;
+    }
 
-        if (status === 'Done') {
-             if (payload && payload.filesToDelete && payload.filesToDelete.length > 0) {
-                pendingCleanups[jobId] = payload.filesToDelete;
-                cleanupBtn.classList.remove('hidden');
-             } else {
-                delete pendingCleanups[jobId];
-                cleanupBtn.classList.add('hidden');
-             }
-             updateBatchCleanupButton();
-        }
+    const statusText = jobEl.querySelector('.status-text');
+    const statusWarning = jobEl.querySelector('.status-warning');
+    const progressBar = jobEl.querySelector('.progress-bar');
+    const startStopBtn = jobEl.querySelector('.btn-start-stop');
+    const cleanupBtn = jobEl.querySelector('.btn-cleanup');
+    const viewErrorsBtn = jobEl.querySelector('.btn-view-errors');
+    
+    statusText.textContent = message || status;
+    progressBar.style.width = `${progress}%`;
+    
+    const isRunning = ['Scanning', 'Copying', 'Syncing'].includes(status);
+    jobEl.classList.toggle('is-running', isRunning);
 
-        if (status === 'Error' || status === 'Done') {
-            if (isBatchRunning) {
-                setTimeout(processJobQueue, 500);
-            }
-            setTimeout(() => {
-                jobEl.classList.remove('is-error', 'is-done');
-                if (!Object.keys(pendingCleanups).includes(jobId)) {
-                    statusText.textContent = 'Idle';
-                    progressBar.style.width = '0%';
-                }
-            }, 8000);
+    if (isRunning) {
+      runningJobs.add(jobId);
+      startStopBtn.innerHTML = '<i class="fa-solid fa-stop"></i>';
+      startStopBtn.setAttribute('aria-label', 'Stop Backup');
+      startStopBtn.classList.add('is-stop');
+    } else {
+      runningJobs.delete(jobId);
+      startStopBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
+      startStopBtn.setAttribute('aria-label', 'Start Backup');
+      startStopBtn.classList.remove('is-stop');
+    }
+    
+    if (payload && payload.copyErrors && payload.copyErrors.length > 0) {
+      jobErrors[jobId] = payload.copyErrors;
+      jobEl.classList.add('is-warning');
+      viewErrorsBtn.classList.remove('hidden');
+      statusWarning.textContent = `${payload.copyErrors.length} file(s) failed to copy.`;
+      statusWarning.classList.remove('hidden');
+    } else if (status !== 'Copying') { // Don't clear warnings while copying
+      jobEl.classList.remove('is-warning');
+      viewErrorsBtn.classList.add('hidden');
+      statusWarning.classList.add('hidden');
+      delete jobErrors[jobId];
+    }
+
+    [...jobEl.querySelectorAll('.btn-edit, .btn-delete')].forEach(b => b.disabled = isRunning);
+    startStopBtn.disabled = false;
+    cleanupBtn.disabled = isRunning;
+    
+    jobEl.classList.toggle('is-error', status === 'Error');
+    jobEl.classList.toggle('is-done', status === 'Done');
+
+    if (status === 'DoneWithErrors') {
+      jobEl.classList.add('is-warning');
+    }
+    
+    if (status === 'Done' || status === 'DoneWithErrors') {
+      if (payload && payload.filesToDelete && payload.filesToDelete.length > 0) {
+        pendingCleanups[jobId] = payload.filesToDelete;
+        cleanupBtn.classList.remove('hidden');
+      } else {
+        delete pendingCleanups[jobId];
+        cleanupBtn.classList.add('hidden');
+      }
+      updateBatchCleanupButton();
+    }
+
+    if (['Error', 'Done', 'DoneWithErrors', 'Stopped'].includes(status)) {
+      if (isBatchRunning) {
+        setTimeout(processJobQueue, 500);
+      }
+      setTimeout(() => {
+        jobEl.classList.remove('is-error', 'is-done');
+        if (!Object.keys(pendingCleanups).includes(jobId) && !Object.keys(jobErrors).includes(jobId)) {
+          statusText.textContent = 'Idle';
+          progressBar.style.width = '0%';
         }
+      }, 8000);
     }
   });
   

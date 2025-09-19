@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Renderer to Main (one-way)
   startJob: (id) => ipcRenderer.send('job:start', id),
+  stopJob: (id) => ipcRenderer.send('job:stop', id),
   cleanupJob: (data) => ipcRenderer.send('job:cleanup', data),
   
   // Main to Renderer

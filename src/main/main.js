@@ -6,6 +6,7 @@ const Store = require('electron-store');
 
 const store = new Store();
 let isLoggingEnabled = store.get('settings', { autoCleanup: false, loggingEnabled: true }).loggingEnabled;
+const stopFlags = new Map();
 
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -186,7 +187,13 @@ async function performCleanup(job, files) {
     }
 }
 
+ipcMain.on('job:stop', (event, jobId) => {
+    logToRenderer('WARN', `Stop request received for job ${jobId}.`);
+    stopFlags.set(jobId, true);
+});
+
 ipcMain.on('job:start', async (event, jobId) => {
+    stopFlags.delete(jobId);
     const jobs = store.get('jobs', []);
     const job = jobs.find(j => j.id === jobId);
     if (!job) return;
@@ -200,8 +207,9 @@ ipcMain.on('job:start', async (event, jobId) => {
         await fs.access(job.source);
         await fs.access(job.destination);
     } catch (err) {
-        sendUpdate('Error', 0, `Path not found: ${err.path}`);
-        logToRenderer('ERROR', `Job ${jobId} failed: Path not found: ${err.path}`);
+        const errorMessage = `Path not found: ${err.path}. Please check the job configuration.`;
+        sendUpdate('Error', 0, errorMessage, { errorType: 'PATH_ERROR' });
+        logToRenderer('ERROR', `Job ${jobId} failed: ${errorMessage}`);
         return;
     }
 
@@ -220,9 +228,8 @@ ipcMain.on('job:start', async (event, jobId) => {
     for (const relativePath of toCreateDirs) {
         await fs.mkdir(path.join(job.destination, relativePath), { recursive: true }).catch(error => {
             const errorMessage = `Failed to create directory: ${relativePath}. ${error.message}`;
-            sendUpdate('Error', 0, errorMessage);
             logToRenderer('ERROR', `Job ${jobId}: ${errorMessage}`);
-            return;
+            // This is not a critical error for the backup itself, so we just log it.
         });
     }
 
@@ -239,10 +246,19 @@ ipcMain.on('job:start', async (event, jobId) => {
     }
     logToRenderer('INFO', `Job ${jobId}: Found ${toCopy.length} files to copy.`);
 
+    const copyErrors = [];
     let copiedSize = 0;
     for (let i = 0; i < toCopy.length; i++) {
+        if (stopFlags.has(jobId)) {
+            logToRenderer('WARN', `Job ${jobId} was stopped by the user.`);
+            sendUpdate('Stopped', (totalCopySize > 0 ? (copiedSize / totalCopySize) * 100 : 0), 'Job stopped by user.');
+            stopFlags.delete(jobId);
+            return;
+        }
+
         const relativePath = toCopy[i];
-        sendUpdate('Copying', totalCopySize > 0 ? (copiedSize / totalCopySize) * 100 : 0, `Copying file ${i + 1} of ${toCopy.length}: ${relativePath}`);
+        const updatePayload = copyErrors.length > 0 ? { copyErrors } : {};
+        sendUpdate('Copying', totalCopySize > 0 ? (copiedSize / totalCopySize) * 100 : 0, `Copying file ${i + 1} of ${toCopy.length}: ${relativePath}`, updatePayload);
         try {
             const destPath = path.join(job.destination, relativePath);
             await fs.mkdir(path.dirname(destPath), { recursive: true });
@@ -250,36 +266,57 @@ ipcMain.on('job:start', async (event, jobId) => {
             copiedSize += sourceEntries.get(relativePath).size;
         } catch (error) {
             const errorMessage = `Failed to copy: ${relativePath}. ${error.message}`;
-            sendUpdate('Error', 0, errorMessage);
+            copyErrors.push({ path: relativePath, error: error.message });
             logToRenderer('ERROR', `Job ${jobId}: ${errorMessage}`);
-            return;
         }
     }
 
-    sendUpdate('Syncing', 100, 'Checking for files to delete...');
+    if (stopFlags.has(jobId)) {
+        logToRenderer('WARN', `Job ${jobId} was stopped by the user after copy phase.`);
+        sendUpdate('Stopped', 100, 'Job stopped by user.');
+        stopFlags.delete(jobId);
+        return;
+    }
+
+    let finalStatus = copyErrors.length > 0 ? 'DoneWithErrors' : 'Done';
+    let finalMessage;
+    const payload = copyErrors.length > 0 ? { copyErrors } : {};
+
+    sendUpdate(finalStatus, 100, 'Checking for files to delete...', payload);
     const toDelete = [];
     for (const [relativePath, destEntry] of destEntries.entries()) {
         if (!sourceEntries.has(relativePath)) {
             toDelete.push({ path: relativePath, type: destEntry.type });
         }
     }
+    payload.filesToDelete = toDelete;
     logToRenderer('INFO', `Job ${jobId}: Found ${toDelete.length} items to delete from destination.`);
 
     const settings = store.get('settings', { autoCleanup: false });
-    if (settings.autoCleanup && toDelete.length > 0) {
-        sendUpdate('Syncing', 100, `Auto-cleaning ${toDelete.length} item(s)...`);
+    if (settings.autoCleanup && toDelete.length > 0 && copyErrors.length === 0) {
+        sendUpdate(finalStatus, 100, `Auto-cleaning ${toDelete.length} item(s)...`, payload);
         const cleanupResult = await performCleanup(job, toDelete);
-        const finalMessage = cleanupResult.success
-            ? `Backup and cleanup completed successfully at ${new Date().toLocaleTimeString()}.`
-            : `Backup complete, but auto-cleanup failed: ${cleanupResult.error}`;
-        sendUpdate('Done', 100, finalMessage);
-        logToRenderer(cleanupResult.success ? 'SUCCESS' : 'WARN', `Job ${jobId}: ${finalMessage}`);
+        if (cleanupResult.success) {
+            finalMessage = `Backup and cleanup completed successfully at ${new Date().toLocaleTimeString()}.`;
+            logToRenderer('SUCCESS', `Job ${jobId}: ${finalMessage}`);
+        } else {
+            finalStatus = 'DoneWithErrors';
+            finalMessage = `Backup complete, but auto-cleanup failed: ${cleanupResult.error}`;
+            logToRenderer('WARN', `Job ${jobId}: ${finalMessage}`);
+        }
+        sendUpdate(finalStatus, 100, finalMessage, payload);
     } else {
-        const finalMessage = toDelete.length > 0
-            ? `Backup complete. ${toDelete.length} item(s) pending cleanup.`
-            : `Backup completed successfully at ${new Date().toLocaleTimeString()}.`;
-        sendUpdate('Done', 100, finalMessage, { filesToDelete: toDelete });
-        logToRenderer('SUCCESS', `Job ${jobId}: ${finalMessage}`);
+        if (copyErrors.length > 0) {
+            finalMessage = `Backup finished with ${copyErrors.length} error(s).`;
+            if (toDelete.length > 0) finalMessage += ` ${toDelete.length} item(s) pending cleanup.`;
+            if (settings.autoCleanup && toDelete.length > 0) finalMessage += ' Auto-cleanup was skipped due to copy errors.';
+        } else {
+            finalMessage = toDelete.length > 0
+                ? `Backup complete. ${toDelete.length} item(s) pending cleanup.`
+                : `Backup completed successfully at ${new Date().toLocaleTimeString()}.`;
+        }
+        sendUpdate(finalStatus, 100, finalMessage, payload);
+        logToRenderer(finalStatus === 'Done' ? 'SUCCESS' : 'WARN', `Job ${jobId}: ${finalMessage}`);
     }
 });
 

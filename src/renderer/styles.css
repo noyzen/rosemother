@@ -210,6 +210,14 @@ input:checked + .slider:before {
     text-overflow: ellipsis;
     max-width: 95%;
 }
+.status-warning {
+    display: block;
+    font-size: 0.8rem;
+    color: var(--accent-yellow);
+    margin-top: -4px;
+    margin-bottom: 8px;
+    font-weight: 500;
+}
 .progress-bar-container {
   width: 100%;
   height: 6px;
@@ -226,6 +234,7 @@ input:checked + .slider:before {
 }
 .job-item.is-done .progress-bar { background-color: var(--accent-green); }
 .job-item.is-error .progress-bar { background-color: var(--accent-red); }
+.job-item.is-warning .progress-bar { background-color: var(--accent-yellow); }
 
 .job-actions { display: flex; gap: 8px; }
 .btn-icon {
@@ -245,9 +254,12 @@ input:checked + .slider:before {
 .btn-icon:not(:disabled):hover { background: #4a4a4a; color: white; }
 .btn-icon:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-icon.btn-delete:not(:disabled):hover { background: var(--accent-red); }
-.btn-icon.btn-start:not(:disabled):hover { background: var(--accent-green); }
+.btn-icon.btn-start-stop:not(.is-stop):not(:disabled):hover { background: var(--accent-green); }
+.btn-icon.btn-start-stop.is-stop:not(:disabled):hover { background: var(--accent-red); }
 .btn-icon.btn-cleanup { color: var(--accent-yellow); }
 .btn-icon.btn-cleanup:not(:disabled):hover { background: var(--accent-yellow); color: var(--bg-darkest); }
+.btn-icon.btn-view-errors { color: var(--accent-yellow); }
+.btn-icon.btn-view-errors:not(:disabled):hover { background: var(--accent-yellow); color: var(--bg-darkest); }
 
 /* --- Empty State --- */
 #empty-state {
@@ -358,6 +370,26 @@ input:checked + .slider:before {
 }
 .confirm-job-sublist li {
     color: var(--fg-medium);
+}
+#confirm-file-list .confirm-error-item {
+    display: flex;
+    flex-direction: column;
+    padding: 6px 5px;
+    gap: 4px;
+    border-bottom: 1px solid var(--border-color);
+    white-space: normal;
+}
+#confirm-file-list .confirm-error-item:last-child {
+    border-bottom: none;
+}
+.confirm-error-path {
+    font-weight: bold;
+    color: var(--fg-lightest);
+}
+.confirm-error-reason {
+    color: var(--fg-medium);
+    font-style: italic;
+    padding-left: 10px;
 }
 
 /* --- Log Viewer Modal --- */
