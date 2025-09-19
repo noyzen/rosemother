@@ -270,7 +270,50 @@ ipcMain.on('job:stop', (event, jobId) => {
     stopFlags.set(jobId, true);
 });
 
-function calculateOrphans(sourcePaths, destIndex, completedDirs) {
+async function calculateOrphanDirs(job, sourcePaths, completedDirs) {
+    const orphanDirs = new Set();
+    const queue = ['']; // Start from the root of the destination
+
+    while (queue.length > 0) {
+        const currentRelativeDir = queue.shift();
+        
+        // Safety check: only analyze contents of a dest dir if its source counterpart was fully scanned.
+        if (!completedDirs.has(currentRelativeDir)) {
+            continue;
+        }
+
+        const currentDestPath = path.join(job.destination, currentRelativeDir);
+        let dirents;
+        try {
+            dirents = await fs.readdir(currentDestPath, { withFileTypes: true });
+        } catch (e) {
+            // This directory might not exist if it was part of a larger orphan dir that was already processed.
+            if (e.code !== 'ENOENT') {
+                console.warn(`[WARN] Job ${job.id}: Could not read directory for orphan check: ${currentDestPath}. Error: ${e.message}`);
+            }
+            continue;
+        }
+
+        for (const dirent of dirents) {
+            if (dirent.isDirectory()) {
+                const childRelativePath = path.join(currentRelativeDir, dirent.name);
+                
+                if (!sourcePaths.has(childRelativePath)) {
+                    // This directory does not exist in the source, so it's an orphan.
+                    // We add it and everything inside it will be deleted recursively. No need to traverse inside.
+                    orphanDirs.add(childRelativePath);
+                } else {
+                    // This directory exists in the source, so we need to check its contents.
+                    queue.push(childRelativePath);
+                }
+            }
+        }
+    }
+    
+    return Array.from(orphanDirs).map(p => ({ path: p, type: 'dir' }));
+}
+
+function calculateOrphanFiles(sourcePaths, destIndex, completedDirs) {
     const toDelete = [];
     for (const destPath in destIndex) {
         const parentDir = path.dirname(destPath);
@@ -472,11 +515,11 @@ ipcMain.on('job:start', async (event, jobId) => {
             let dirents;
             try { dirents = await fs.readdir(sourceDir, { withFileTypes: true }); } catch (err) { return; }
 
-            for (const dirent of dirents) {
+            for (const [index, dirent] of dirents.entries()) {
                 if (stopFlags.has(jobId)) return;
                 
-                processedFiles++;
-                if (processedFiles % YIELD_THRESHOLD === 0) {
+                // Yield to event loop to keep UI responsive on very large directories
+                if (index > 0 && index % YIELD_THRESHOLD === 0) {
                     await new Promise(resolve => setImmediate(resolve));
                 }
 
@@ -496,7 +539,8 @@ ipcMain.on('job:start', async (event, jobId) => {
                     await fs.mkdir(destPath, { recursive: true }).catch(() => {});
                     await syncDirectory(relativePath);
                 } else if (dirent.isFile()) {
-                    const progress = totalSourceFiles > 0 ? (processedFiles / totalSourceFiles) * 100 : -1;
+                    processedFiles++; // Increment counter only for files
+                    const progress = totalSourceFiles > 0 ? Math.min((processedFiles / totalSourceFiles) * 100, 100) : -1;
                     const copyPayload = { processedFiles, totalSourceFiles, errorCount: copyErrors.length };
                     
                     try {
@@ -575,8 +619,10 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
 
         sendUpdate('Cleaning', -1, 'Checking for files to delete...');
-        const toDelete = calculateOrphans(sourcePaths, destIndex, completedDirs);
-        console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items in destination.`);
+        const orphanFiles = calculateOrphanFiles(sourcePaths, destIndex, completedDirs);
+        const orphanDirs = await calculateOrphanDirs(job, sourcePaths, completedDirs);
+        const toDelete = [...orphanFiles, ...orphanDirs];
+        console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items in destination (${orphanFiles.length} files, ${orphanDirs.length} directories).`);
         
         // Core Decision Logic: Should we auto-cleanup?
         // Cleanup runs if enabled, there are files to delete, and no copy errors occurred (for safety).
@@ -630,7 +676,9 @@ ipcMain.on('job:start', async (event, jobId) => {
 
     } catch(err) {
         console.error(`[ERROR] A critical error occurred in job ${jobId}: ${err.message}\n${err.stack}`);
-        const toDelete = calculateOrphans(sourcePaths, destIndex, completedDirs);
+        const orphanFiles = calculateOrphanFiles(sourcePaths, destIndex, completedDirs);
+        const orphanDirs = await calculateOrphanDirs(job, sourcePaths, completedDirs);
+        const toDelete = [...orphanFiles, ...orphanDirs];
         if (toDelete.length > 0) {
             console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items that can be cleaned up despite the error.`);
         }

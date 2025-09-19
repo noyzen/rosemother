@@ -43,7 +43,7 @@
 
   <!-- Job Add/Edit Modal -->
   <div id="job-modal" class="modal-overlay hidden">
-    <div class="modal-content">
+    <div class="modal-content modal-job-edit">
       <div class="modal-header">
         <h2 id="modal-title">New Backup Job</h2>
         <button type="button" id="close-job-btn" class="btn-icon" aria-label="Close"><i class="fa-solid fa-times"></i></button>
@@ -51,66 +51,80 @@
       <form id="job-form">
         <div class="form-scroll-content">
           <input type="hidden" id="job-id-input" />
-          <div class="form-group">
-              <label for="job-name">Job Name</label>
-              <input type="text" id="job-name" placeholder="e.g., My Documents Backup" required />
-          </div>
-          <div class="form-group">
-            <label for="source-path">Source Folder</label>
-            <div class="path-input-group">
-              <input type="text" id="source-path" placeholder="Select a source folder..." readonly required />
-              <button type="button" class="btn-browse" data-target="source-path">Browse...</button>
-            </div>
-          </div>
-          <div class="form-group">
-            <label for="dest-path">Destination Folder</label>
-            <div class="path-input-group">
-              <input type="text" id="dest-path" placeholder="Select a destination folder..." readonly required />
-              <button type="button" class="btn-browse" data-target="dest-path">Browse...</button>
+
+          <div class="form-section">
+            <h3 class="form-section-title"><span>1</span>Select Folders</h3>
+            <div class="path-selection-container">
+              <div class="path-selector-box" data-target="source-path" role="button" tabindex="0">
+                <div class="path-selector-header">
+                  <i class="fa-regular fa-folder-open source-icon"></i>
+                  <h4>Source</h4>
+                </div>
+                <p class="path-selector-desc">The folder to back up from.</p>
+                <input type="text" id="source-path" placeholder="Click to select a folder..." readonly required />
+              </div>
+              <div class="path-arrow-visual"><i class="fa-solid fa-right-long"></i></div>
+              <div class="path-selector-box" data-target="dest-path" role="button" tabindex="0">
+                <div class="path-selector-header">
+                  <i class="fa-solid fa-server dest-icon"></i>
+                  <h4>Destination</h4>
+                </div>
+                <p class="path-selector-desc">The folder to back up to.</p>
+                <input type="text" id="dest-path" placeholder="Click to select a folder..." readonly required />
+              </div>
             </div>
           </div>
           
-          <div class="form-group-row">
-              <label for="job-verify-content" class="setting-label">Content Verification</label>
-              <div class="form-group-control">
-                  <label class="toggle-switch">
-                      <input type="checkbox" id="job-verify-content">
-                      <span class="slider"></span>
-                  </label>
-                  <p class="setting-description">Verify files using content hashes (SHA-256). Slower, but extremely reliable. Recommended for critical data. If off, uses faster size/date check.</p>
-              </div>
+          <div class="form-section">
+            <h3 class="form-section-title"><span>2</span>Job Details</h3>
+            <div class="form-group">
+                <label for="job-name">Job Name</label>
+                <input type="text" id="job-name" placeholder="e.g., My Documents Backup" required />
+            </div>
+            <div class="form-group-row">
+                <label for="job-verify-content" class="setting-label"><i class="fa-solid fa-shield-halved"></i>Content Verification</label>
+                <div class="form-group-control">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="job-verify-content">
+                        <span class="slider"></span>
+                    </label>
+                    <p class="setting-description">Verify files using content hashes (SHA-256). Slower, but extremely reliable. Recommended for critical data. If off, uses faster size/date check.</p>
+                </div>
+            </div>
           </div>
 
-          <div class="exclusions-section">
-              <div class="form-group-row">
-                  <label for="job-exclusions-enabled" class="setting-label">Exclusion Rules</label>
-                  <div class="form-group-control">
-                      <label class="toggle-switch">
-                          <input type="checkbox" id="job-exclusions-enabled">
-                          <span class="slider"></span>
-                      </label>
-                      <p class="setting-description">Exclude certain files or folders from this backup job.</p>
-                  </div>
+          <div class="form-section">
+            <div class="form-group-row exclusion-header">
+              <h3 class="form-section-title"><span>3</span>Exclusion Rules</h3>
+              <div class="form-group-control">
+                  <label class="toggle-switch">
+                      <input type="checkbox" id="job-exclusions-enabled">
+                      <span class="slider"></span>
+                  </label>
               </div>
-              <div id="exclusions-container" class="hidden">
+            </div>
+            <div id="exclusions-container" class="hidden">
+                <p class="setting-description">Exclude specific sub-folders or file types from this backup job.</p>
+                <div class="exclusion-controls-grid">
                   <div class="form-group">
                       <label>Excluded Folders</label>
                       <p class="setting-description mini">Select folders inside your source to exclude them from the backup.</p>
                       <div class="exclusion-list" id="excluded-paths-list"></div>
                       <button type="button" class="btn btn-secondary btn-sm" id="add-excluded-folder-btn">
-                          <i class="fa-solid fa-folder-plus"></i> Add Folder to Exclude...
+                          <i class="fa-solid fa-folder-plus"></i> Add Folder...
                       </button>
                   </div>
                   <div class="form-group">
                       <label for="excluded-extension-input">Excluded Extensions</label>
+                       <p class="setting-description mini">Add file extensions to exclude (e.g., .log, .tmp).</p>
+                      <div class="exclusion-list" id="excluded-extensions-list"></div>
                       <div class="exclusion-input-group">
-                          <input type="text" id="excluded-extension-input" placeholder="e.g., .log, .tmp"/>
+                          <input type="text" id="excluded-extension-input" placeholder="e.g., .tmp"/>
                           <button type="button" class="btn btn-secondary btn-sm" id="add-excluded-extension-btn">Add</button>
                       </div>
-                      <p class="setting-description mini">Include the dot (e.g., `.log`).</p>
-                      <div class="exclusion-list" id="excluded-extensions-list"></div>
                   </div>
-              </div>
+                </div>
+            </div>
           </div>
         </div>
         <div class="modal-actions">

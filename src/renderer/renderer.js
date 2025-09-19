@@ -400,12 +400,13 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('cancel-job-btn').addEventListener('click', closeJobModal);
   document.getElementById('close-job-btn').addEventListener('click', closeJobModal);
   
-  document.querySelectorAll('.btn-browse').forEach(button => {
-    button.addEventListener('click', async (e) => {
-      const targetId = e.currentTarget.dataset.target;
+  document.querySelectorAll('.path-selector-box').forEach(box => {
+    box.addEventListener('click', async () => {
+      const targetId = box.dataset.target;
+      const targetInput = document.getElementById(targetId);
       const path = await window.electronAPI.openDialog();
       if (path) {
-        document.getElementById(targetId).value = path;
+        targetInput.value = path;
       }
     });
   });
@@ -414,14 +415,48 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     const id = jobIdInput.value;
 
+    const sourcePath = sourcePathInput.value;
+    const destPath = destPathInput.value;
+
+    if (!jobNameInput.value.trim()) {
+        alert('Job Name is required.');
+        jobNameInput.focus();
+        return;
+    }
+
+    if (!sourcePath || !destPath) {
+        alert('Source and Destination folders must be selected.');
+        return;
+    }
+
+    // --- Path Validation ---
+    if (sourcePath === destPath) {
+        alert('Source and Destination folders cannot be the same.');
+        return;
+    }
+
+    const normSource = sourcePath.replace(/\\/g, '/');
+    const normDest = destPath.replace(/\\/g, '/');
+    const normSourceFolder = normSource.endsWith('/') ? normSource : normSource + '/';
+    const normDestFolder = normDest.endsWith('/') ? normDest : normDest + '/';
+
+    if (normDestFolder.startsWith(normSourceFolder)) {
+        alert('The destination folder cannot be inside the source folder.');
+        return;
+    }
+    if (normSourceFolder.startsWith(normDestFolder)) {
+        alert('The source folder cannot be inside the destination folder.');
+        return;
+    }
+    
     const getRulesFromList = (listEl) => {
         return Array.from(listEl.querySelectorAll('.exclusion-item span')).map(span => span.textContent);
     };
 
     const newJobData = {
       name: jobNameInput.value.trim(),
-      source: sourcePathInput.value,
-      destination: destPathInput.value,
+      source: sourcePath,
+      destination: destPath,
       verifyContent: jobVerifyContentToggle.checked,
       exclusions: {
         enabled: jobExclusionsEnabledToggle.checked,
@@ -430,16 +465,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
-    if (!newJobData.name) {
-        alert('Job Name is required.');
-        return;
-    }
-
-    if (!newJobData.source || !newJobData.destination) {
-        alert('Source and Destination folders must be selected.');
-        return;
-    }
-    
     if (id) { // Editing
       const index = jobs.findIndex(job => job.id === id);
       jobs[index] = { ...jobs[index], ...newJobData };
@@ -483,8 +508,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const input = document.getElementById(inputId);
     const button = document.getElementById(buttonId);
     const addRule = () => {
-      const value = input.value.trim();
+      let value = input.value.trim().toLowerCase();
       if (value) {
+        if (!value.startsWith('.')) {
+            value = '.' + value;
+        }
         renderExclusionRule(listEl, value);
         input.value = '';
         input.focus();
