@@ -184,8 +184,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
           if (filteredErrors.length > 0) {
               errorCount += filteredErrors.length;
-              html += `<div class="error-job-group">
-                          <h3 class="error-job-title">${job.name}</h3>`;
+              html += `<div class="error-job-group" data-job-id="${job.id}">
+                          <h3 class="error-job-title">
+                            <span>${job.name}</span>
+                            <button class="btn btn-sm btn-danger btn-clear-job-errors" title="Clear errors for this job">
+                                <i class="fa-solid fa-trash-can"></i> Clear These Errors
+                            </button>
+                          </h3>`;
               
               filteredErrors.forEach(error => {
                   html += `<div class="error-entry">
@@ -223,6 +228,30 @@ document.addEventListener('DOMContentLoaded', () => {
           renderErrorPanel();
           renderJobs();
           setTimeout(() => errorsModal.classList.add('hidden'), 500);
+      }
+  });
+
+  errorsListContainer.addEventListener('click', async e => {
+      const clearButton = e.target.closest('.btn-clear-job-errors');
+      if (clearButton) {
+          const jobGroup = clearButton.closest('.error-job-group');
+          const jobId = jobGroup.dataset.jobId;
+          const job = jobs.find(j => j.id === jobId);
+          if (!job || !jobErrors[jobId]) return;
+
+          const confirmed = await showConfirm(
+              `Clear errors for "${job.name}"?`,
+              `Are you sure you want to clear ${jobErrors[jobId].length} persisted copy error(s) for this job? This action cannot be undone.`,
+              'danger'
+          );
+
+          if (confirmed) {
+              delete jobErrors[jobId];
+              await window.electronAPI.setJobErrors(jobErrors);
+              addLog('WARN', `Persistent errors for job "${job.name}" have been cleared.`);
+              renderErrorPanel(errorsSearchInput.value); // Re-render the panel
+              renderJobs(); // Re-render the main job list to hide the button
+          }
       }
   });
   // --- End Job Errors Panel ---
