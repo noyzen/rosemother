@@ -160,7 +160,13 @@ ipcMain.on('job:start', async (event, jobId) => {
     }
 
     if (toDelete.length > 0) {
-        const userChoice = await mainWindow.webContents.invoke('job:confirm-delete', { jobId, files: toDelete });
+        mainWindow.webContents.send('job:request-delete-confirmation', { jobId, files: toDelete });
+        const userChoice = await new Promise(resolve => {
+            ipcMain.once(`job:confirm-delete-response-${jobId}`, (_event, confirmed) => {
+                resolve({ confirmed });
+            });
+        });
+        
         if (userChoice && userChoice.confirmed) {
             for (const relativePath of toDelete) {
                 const destPath = path.join(job.destination, relativePath);

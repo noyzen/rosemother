@@ -8,16 +8,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Renderer to Main (one-way)
   startJob: (id) => ipcRenderer.send('job:start', id),
+  sendDeleteConfirmation: (jobId, confirmed) => ipcRenderer.send(`job:confirm-delete-response-${jobId}`, confirmed),
   
   // Main to Renderer
   onJobUpdate: (callback) => ipcRenderer.on('job:update', (_event, value) => callback(value)),
-
-  // Special handler for delete confirmation
-  handleConfirmDelete: (callback) => {
-    // This is tricky. We'll use a one-time listener setup.
-    ipcRenderer.removeHandler('job:confirm-delete'); // Clean up previous handler
-    ipcRenderer.handle('job:confirm-delete', async (_event, value) => {
-      return await callback(value);
-    });
-  }
+  onDeleteRequest: (callback) => ipcRenderer.on('job:request-delete-confirmation', (_event, value) => callback(value)),
 });

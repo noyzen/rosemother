@@ -210,14 +210,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  window.electronAPI.handleConfirmDelete(async ({ jobId, files }) => {
+  window.electronAPI.onDeleteRequest(async ({ jobId, files }) => {
     const confirmed = await showConfirm(
         'Confirm Sync Deletion',
         `The following ${files.length} files exist in the destination but not the source. Do you want to permanently delete them? This action cannot be undone.`,
         'danger',
         files
     );
-    return { confirmed };
+    window.electronAPI.sendDeleteConfirmation(jobId, confirmed);
   });
 
   loadJobs();
