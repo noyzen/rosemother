@@ -1,6 +1,7 @@
 
 
 
+
 const { app, BrowserWindow, Menu, ipcMain, dialog, powerSaveBlocker } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
@@ -356,6 +357,7 @@ ipcMain.on('job:start', async (event, jobId) => {
     const sourcePaths = new Set();
     const completedDirs = new Set();
     const YIELD_THRESHOLD = 500; // General threshold for yielding to event loop
+    const copyErrors = [];
 
     try {
         if (runningJobsInMain.size === 1) { // Only when the first job starts
@@ -378,8 +380,6 @@ ipcMain.on('job:start', async (event, jobId) => {
             console.error(`[ERROR] Job ${jobId} failed: ${errorMessage}`);
             return;
         }
-
-        const copyErrors = [];
 
         // --- Reliable Index Rebuilding ---
         // 1. Load the old index ONLY to get cached hashes.
@@ -562,14 +562,10 @@ ipcMain.on('job:start', async (event, jobId) => {
         sendUpdate('Copying', 0, `Starting backup of ${totalSourceFiles.toLocaleString()} file(s)...`);
         await syncDirectory('');
 
-        if (stopFlags.has(jobId)) {
+        // --- UNIFIED COMPLETION AND STOP LOGIC ---
+        const wasStopped = stopFlags.has(jobId);
+        if (wasStopped) {
             console.warn(`[WARN] Job ${jobId} was stopped by the user.`);
-            const toDelete = calculateOrphans(sourcePaths, destIndex, completedDirs);
-            if (toDelete.length > 0) {
-                console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items in destination based on partial scan.`);
-            }
-            sendUpdate('Stopped', 0, 'Job stopped by user.', { filesToDelete: toDelete });
-            return;
         }
 
         if (copyErrors.length > 0) {
@@ -580,44 +576,56 @@ ipcMain.on('job:start', async (event, jobId) => {
 
         sendUpdate('Cleaning', -1, 'Checking for files to delete...');
         const toDelete = calculateOrphans(sourcePaths, destIndex, completedDirs);
-        toDelete.forEach(item => {
-            delete destIndex[item.path];
-        });
         console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items in destination.`);
         
-        let finalStatus = copyErrors.length > 0 ? 'DoneWithErrors' : 'Done';
-        const payload = { 
-            ...(copyErrors.length > 0 && { copyErrors }),
-            filesToDelete: toDelete 
-        };
-        
-        let finalMessage;
-        if (settings.autoCleanup && toDelete.length > 0 && copyErrors.length === 0) {
-            sendUpdate(finalStatus, 100, `Auto-cleaning ${toDelete.length} item(s)...`, payload);
+        // Core Decision Logic: Should we auto-cleanup?
+        // Cleanup runs if enabled, there are files to delete, and no copy errors occurred (for safety).
+        const shouldAutoCleanup = settings.autoCleanup && toDelete.length > 0 && copyErrors.length === 0;
+
+        if (shouldAutoCleanup) {
+            const cleanupMessage = wasStopped ? `Auto-cleaning ${toDelete.length} item(s) after stop...` : `Auto-cleaning ${toDelete.length} item(s)...`;
+            sendUpdate('Cleaning', 0, cleanupMessage, { filesToDelete: toDelete });
+
             const cleanupResult = await performCleanup(job, toDelete, (progress, message) => {
                 sendUpdate('Cleaning', progress, message);
             });
+            
+            let finalStatus, finalMessage;
             if (cleanupResult.success) {
-                finalMessage = `Backup and cleanup completed successfully at ${new Date().toLocaleTimeString()}.`;
-                console.log(`[SUCCESS] Job ${jobId}: ${finalMessage}`);
+                toDelete.forEach(item => delete destIndex[item.path]); // remove cleaned files from index
+                finalStatus = wasStopped ? 'Stopped' : 'Done';
+                finalMessage = wasStopped ? 'Job stopped and cleanup complete.' : `Backup and cleanup completed successfully at ${new Date().toLocaleTimeString()}.`;
             } else {
-                finalStatus = 'DoneWithErrors';
-                finalMessage = `Backup complete, but auto-cleanup failed: ${cleanupResult.error}`;
-                console.warn(`[WARN] Job ${jobId}: ${finalMessage}`);
+                finalStatus = wasStopped ? 'Stopped' : 'DoneWithErrors';
+                finalMessage = wasStopped ? `Job stopped, but auto-cleanup failed: ${cleanupResult.error}` : `Backup complete, but auto-cleanup failed: ${cleanupResult.error}`;
             }
-            sendUpdate(finalStatus, 100, finalMessage, payload);
-        } else {
-            if (copyErrors.length > 0) {
-                finalMessage = `Backup finished with ${copyErrors.length} error(s).`;
-                if (toDelete.length > 0) finalMessage += ` ${toDelete.length} item(s) pending cleanup.`;
-                if (settings.autoCleanup && toDelete.length > 0) finalMessage += ' Auto-cleanup was skipped due to copy errors.';
+            sendUpdate(finalStatus, wasStopped ? 0 : 100, finalMessage, { 
+                filesToDelete: cleanupResult.success ? [] : toDelete, 
+                ...(copyErrors.length > 0 && { copyErrors }) 
+            });
+
+        } else { // No auto-cleanup: either disabled, nothing to delete, or copy errors occurred.
+            let finalStatus, finalMessage;
+            if (wasStopped) {
+                finalStatus = 'Stopped';
+                finalMessage = 'Job stopped by user.';
             } else {
-                finalMessage = toDelete.length > 0
-                    ? `Backup complete. ${toDelete.length} item(s) pending cleanup.`
-                    : `Backup completed successfully at ${new Date().toLocaleTimeString()}.`;
+                finalStatus = copyErrors.length > 0 ? 'DoneWithErrors' : 'Done';
+                if (copyErrors.length > 0) {
+                    finalMessage = `Backup finished with ${copyErrors.length} error(s).`;
+                    if (toDelete.length > 0) finalMessage += ` ${toDelete.length} item(s) pending cleanup.`;
+                    if (settings.autoCleanup && toDelete.length > 0) finalMessage += ' Auto-cleanup was skipped due to copy errors.';
+                } else {
+                    finalMessage = toDelete.length > 0
+                        ? `Backup complete. ${toDelete.length} item(s) pending cleanup.`
+                        : `Backup completed successfully at ${new Date().toLocaleTimeString()}.`;
+                }
             }
-            sendUpdate(finalStatus, 100, finalMessage, payload);
-            console.log(finalStatus === 'Done' ? `[SUCCESS] Job ${jobId}: ${finalMessage}` : `[WARN] Job ${jobId}: ${finalMessage}`);
+            const payload = {
+                filesToDelete: toDelete,
+                ...(copyErrors.length > 0 && { copyErrors })
+            };
+            sendUpdate(finalStatus, wasStopped ? 0 : 100, finalMessage, payload);
         }
 
     } catch(err) {
