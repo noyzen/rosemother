@@ -229,9 +229,11 @@ document.addEventListener('DOMContentLoaded', () => {
                      <div class="job-status-container">
                         <div class="job-status">
                             <span class="status-text">${idleMessage}</span>
-                            <span class="status-count hidden"></span>
-                            <span class="status-eta hidden"></span>
-                            <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${jobErrors[job.id].length} file(s) failed` : ''}</span>
+                            <div class="status-details">
+                                <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${jobErrors[job.id].length} file(s) failed` : ''}</span>
+                                <span class="status-count hidden"></span>
+                                <span class="status-eta hidden"></span>
+                            </div>
                         </div>
                         <div class="progress-bar-container">
                             <div class="progress-bar"></div>

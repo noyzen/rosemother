@@ -206,8 +206,32 @@ input:checked + .slider:before { transform: translateX(20px); }
   flex-wrap: wrap;
 }
 .job-status-container { flex-grow: 1; min-width: 0; }
-.job-status { display: flex; justify-content: space-between; align-items: baseline; font-size: 0.8rem; color: var(--text-tertiary); margin-bottom: var(--spacing-xs); flex-wrap: wrap; }
-.status-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; flex-grow: 1; }
+.job-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+  margin-bottom: var(--spacing-xs);
+  flex-wrap: nowrap;
+  gap: var(--spacing-md);
+  overflow: hidden;
+}
+.status-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  flex-grow: 1;
+  min-width: 0;
+}
+.status-details {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-md);
+  flex-shrink: 0;
+}
 .status-spinner { margin-right: 8px; }
 .status-count, .status-eta, .status-warning { font-size: 0.75rem; flex-shrink: 0; }
 .status-warning { color: var(--accent-warning); font-weight: 500; }
