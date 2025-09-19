@@ -345,25 +345,59 @@ input[type="text"]:focus {
 }
 input[type="text"][readonly] {
   background-color: var(--bg-main); color: var(--text-secondary);
+  cursor: default;
+  pointer-events: none;
 }
-input[type="text"][readonly]:hover { cursor: pointer; }
-
 
 /* Confirmation dialog */
-#confirm-modal .modal-content { padding: var(--spacing-lg); }
+#confirm-modal .modal-content { max-width: 800px; padding: var(--spacing-lg); }
 #confirm-modal { z-index: 1001; }
 .confirm-dialog h2 { margin-bottom: var(--spacing-sm); }
 .confirm-dialog p { line-height: 1.6; color: var(--text-secondary); margin: 0; }
-#confirm-file-list {
-  max-height: 30vh; overflow-y: auto; background: var(--bg-main); border: 1px solid var(--border-primary);
-  border-radius: var(--border-radius-md); padding: 10px; margin-top: 20px; font-size: 0.8rem; color: var(--text-secondary);
+#confirm-details-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-lg);
+  margin-top: var(--spacing-lg);
+  padding-top: var(--spacing-lg);
+  border-top: 1px solid var(--border-primary);
 }
-#confirm-file-list ul { list-style: none; padding: 0; margin: 0; }
-#confirm-file-list li { padding: 2px 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 3px; }
-.confirm-job-header { font-size: 0.9rem; color: var(--text-primary); background: var(--bg-secondary); padding: 6px 10px; margin-top: 10px; border-radius: 4px; }
-.confirm-job-header:first-child { margin-top: 0; }
-.confirm-job-sublist { padding-left: 20px; margin: 5px 0 10px 0; }
-.confirm-job-sublist li { color: var(--text-tertiary); }
+.confirm-column {
+  background-color: var(--bg-main);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--border-radius-md);
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.confirm-column h4 {
+  margin: 0 0 var(--spacing-sm) 0;
+  font-size: 1rem;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+.confirm-column h4 i { color: var(--text-tertiary); }
+.confirm-column ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  overflow-y: auto;
+  flex-grow: 1;
+  max-height: 30vh;
+}
+.confirm-column li {
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: var(--border-radius-sm);
+}
+.confirm-column li:nth-child(odd) { background-color: rgba(255, 255, 255, 0.02); }
 
 
 /* --- New Job Modal Redesign --- */
@@ -411,6 +445,8 @@ input[type="text"][readonly]:hover { cursor: pointer; }
   cursor: pointer;
   transition: var(--transition-fast);
   text-align: center;
+  display: flex;
+  flex-direction: column;
 }
 .path-selector-box:hover {
   border-color: var(--accent-primary);
@@ -420,6 +456,8 @@ input[type="text"][readonly]:hover { cursor: pointer; }
 .path-selector-header h4 { margin: 0; font-size: 1.1rem; }
 .path-selector-desc { font-size: 0.85rem; color: var(--text-tertiary); margin: 4px 0 12px 0; }
 .path-arrow-visual { display: flex; align-items: center; font-size: 2rem; color: var(--border-primary); }
+.path-selector-box input { margin-top: auto; }
+
 
 #job-form .form-group-row, .exclusion-header {
   display: grid;

@@ -23,10 +23,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const excludedExtensionsPathList = document.getElementById('excluded-extensions-list');
   const addExcludedFolderBtn = document.getElementById('add-excluded-folder-btn');
   
+  // Confirm Modal Elements
   const confirmModal = document.getElementById('confirm-modal');
   const confirmTitle = document.getElementById('confirm-title');
   const confirmMessage = document.getElementById('confirm-message');
+  const confirmDetailsContainer = document.getElementById('confirm-details-container');
   const confirmFileList = document.getElementById('confirm-file-list');
+  const confirmFileCount = document.getElementById('confirm-file-count');
+  const confirmDirList = document.getElementById('confirm-dir-list');
+  const confirmDirCount = document.getElementById('confirm-dir-count');
+
 
   // Job Errors Modal
   const errorsModal = document.getElementById('errors-modal');
@@ -327,70 +333,75 @@ document.addEventListener('DOMContentLoaded', () => {
   const closeJobModal = () => jobModal.classList.add('hidden');
   
   const showConfirm = (title, message, okClass = 'danger', data = null) => {
-    return new Promise(resolve => {
-        confirmTitle.textContent = title;
-        confirmMessage.textContent = message;
-        confirmFileList.innerHTML = '';
+      return new Promise(resolve => {
+          confirmTitle.textContent = title;
+          confirmMessage.textContent = message;
+          confirmFileList.innerHTML = '';
+          confirmDirList.innerHTML = '';
 
-        if(data) {
-            confirmFileList.classList.remove('hidden');
-            const list = document.createElement('ul');
-            
-            if (Array.isArray(data)) { // Single job cleanup
-                 data.slice(0, 100).forEach(file => {
-                    const item = document.createElement('li');
-                    item.textContent = file.path;
-                    list.appendChild(item);
-                });
-                if (data.length > 100) {
-                    const item = document.createElement('li');
-                    item.textContent = `...and ${data.length - 100} more items.`;
-                    list.appendChild(item);
-                }
-            } else { // Batch cleanup
-                 Object.entries(data).forEach(([jobId, files]) => {
-                    if (files.length === 0) return;
+          const populateList = (listEl, items, limit, moreText) => {
+              listEl.innerHTML = '';
+              items.slice(0, limit).forEach(file => {
+                  const item = document.createElement('li');
+                  item.textContent = file.path;
+                  listEl.appendChild(item);
+              });
+              if (items.length > limit) {
+                  const item = document.createElement('li');
+                  item.textContent = `...and ${items.length - limit} more ${moreText}.`;
+                  listEl.appendChild(item);
+              }
+          };
+
+          if (data) { // Data for cleanup
+              confirmDetailsContainer.classList.remove('hidden');
+              
+              if (Array.isArray(data)) { // Single job cleanup
+                  const filesToClean = data.filter(item => item.type === 'file');
+                  const dirsToClean = data.filter(item => item.type === 'dir');
+                  
+                  confirmFileCount.textContent = filesToClean.length;
+                  confirmDirCount.textContent = dirsToClean.length;
+                  
+                  populateList(confirmFileList, filesToClean, 50, 'files');
+                  populateList(confirmDirList, dirsToClean, 50, 'folders');
+
+              } else { // Batch cleanup
+                  let totalFiles = 0;
+                  let totalDirs = 0;
+                  // For batch, we just show a simpler combined list.
+                  Object.entries(data).forEach(([jobId, items]) => {
+                    if (items.length === 0) return;
                     const job = jobs.find(j => j.id === jobId);
                     const jobName = job ? job.name : 'Unknown Job';
                     const header = document.createElement('li');
                     header.className = 'confirm-job-header';
-                    header.innerHTML = `<strong>${jobName}</strong> (${files.length} items)`;
-                    list.appendChild(header);
+                    header.innerHTML = `<strong>${jobName}</strong> (${items.length} items)`;
+                    confirmFileList.appendChild(header); // Just use one list for batch
+                    totalFiles += items.filter(i => i.type === 'file').length;
+                    totalDirs += items.filter(i => i.type === 'dir').length;
+                  });
+                  confirmFileCount.textContent = totalFiles;
+                  confirmDirCount.textContent = totalDirs;
+              }
+          } else {
+              confirmDetailsContainer.classList.add('hidden');
+          }
 
-                    const sublist = document.createElement('ul');
-                    sublist.className = 'confirm-job-sublist';
-                    files.slice(0, 20).forEach(file => {
-                        const item = document.createElement('li');
-                        item.textContent = file.path;
-                        sublist.appendChild(item);
-                    });
-                    if (files.length > 20) {
-                        const item = document.createElement('li');
-                        item.textContent = `...and ${files.length - 20} more.`;
-                        sublist.appendChild(item);
-                    }
-                    list.appendChild(sublist);
-                });
-            }
-            confirmFileList.appendChild(list);
-        } else {
-            confirmFileList.classList.add('hidden');
-        }
+          const okBtn = document.getElementById('confirm-ok-btn');
+          okBtn.className = `btn btn-${okClass}`;
+          
+          document.getElementById('confirm-cancel-btn').classList.toggle('hidden', okClass === 'info');
+          okBtn.textContent = okClass === 'info' ? 'Close' : 'OK';
 
-        const okBtn = document.getElementById('confirm-ok-btn');
-        okBtn.className = `btn btn-${okClass}`;
-        
-        document.getElementById('confirm-cancel-btn').classList.toggle('hidden', okClass === 'info');
-        okBtn.textContent = okClass === 'info' ? 'Close' : 'OK';
-
-        confirmModal.classList.remove('hidden');
-        confirmCallback = (confirmed) => {
-            confirmModal.classList.add('hidden');
-            document.getElementById('confirm-cancel-btn').classList.remove('hidden');
-            okBtn.textContent = 'OK';
-            resolve(confirmed);
-        };
-    });
+          confirmModal.classList.remove('hidden');
+          confirmCallback = (confirmed) => {
+              confirmModal.classList.add('hidden');
+              document.getElementById('confirm-cancel-btn').classList.remove('hidden');
+              okBtn.textContent = 'OK';
+              resolve(confirmed);
+          };
+      });
   };
 
   document.getElementById('confirm-cancel-btn').addEventListener('click', () => confirmCallback(false));
@@ -401,7 +412,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('close-job-btn').addEventListener('click', closeJobModal);
   
   document.querySelectorAll('.path-selector-box').forEach(box => {
-    box.addEventListener('click', async () => {
+    box.addEventListener('click', async (e) => {
+      // Prevent click on input from firing this
+      if (e.target.tagName === 'INPUT') return;
       const targetId = box.dataset.target;
       const targetInput = document.getElementById(targetId);
       const path = await window.electronAPI.openDialog();

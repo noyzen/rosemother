@@ -140,7 +140,16 @@
     <div class="modal-content confirm-dialog">
       <h2 id="confirm-title">Confirm Action</h2>
       <p id="confirm-message">Are you sure?</p>
-      <div id="confirm-file-list" class="hidden"></div>
+      <div id="confirm-details-container" class="hidden">
+        <div class="confirm-column">
+          <h4><i class="fa-solid fa-folder"></i> Folders (<span id="confirm-dir-count">0</span>)</h4>
+          <ul id="confirm-dir-list"></ul>
+        </div>
+        <div class="confirm-column">
+          <h4><i class="fa-solid fa-file"></i> Files (<span id="confirm-file-count">0</span>)</h4>
+          <ul id="confirm-file-list"></ul>
+        </div>
+      </div>
       <div class="modal-actions">
         <button type="button" id="confirm-cancel-btn" class="btn btn-secondary">Cancel</button>
         <button type="button" id="confirm-ok-btn" class="btn btn-danger">OK</button>

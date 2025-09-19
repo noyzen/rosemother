@@ -525,11 +525,9 @@ ipcMain.on('job:start', async (event, jobId) => {
 
                 const relativePath = path.join(relativeDir, dirent.name);
                 sourcePaths.add(relativePath);
-
-                const isItemExcluded = job.exclusions && isExcluded(relativePath, job.exclusions);
-                if (isItemExcluded) {
-                    if (dirent.isDirectory()) await syncDirectory(relativePath);
-                    continue;
+                
+                if (job.exclusions && isExcluded(relativePath, job.exclusions)) {
+                    continue; // Skip excluded files and directories
                 }
                 
                 const sourcePath = path.join(job.source, relativePath);
