@@ -172,22 +172,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const updateHeaderActionsState = () => {
     const hasJobs = jobs.length > 0;
     const isAnyJobRunning = runningJobs.size > 0;
-
+    
     if (!hasJobs) {
       startAllBtn.classList.add('hidden');
       stopAllBtn.classList.add('hidden');
       return;
     }
 
-    if (isAnyJobRunning) {
-      startAllBtn.classList.add('hidden');
-      stopAllBtn.classList.remove('hidden');
-    } else {
-      startAllBtn.classList.remove('hidden');
+    startAllBtn.classList.toggle('hidden', isAnyJobRunning || isBatchRunning);
+    stopAllBtn.classList.toggle('hidden', !isAnyJobRunning);
+
+    if (!isAnyJobRunning) {
       startAllBtn.disabled = false;
       startAllBtn.innerHTML = '<i class="fa-solid fa-play-circle"></i> Start All';
       
-      stopAllBtn.classList.add('hidden');
       stopAllBtn.disabled = false;
       stopAllBtn.innerHTML = '<i class="fa-solid fa-stop-circle"></i> Stop All';
 
@@ -563,6 +561,13 @@ document.addEventListener('DOMContentLoaded', () => {
             button.setAttribute('title', 'Stopping...');
             window.electronAPI.stopJob(jobId);
         } else {
+            runningJobs.add(jobId);
+            updateHeaderActionsState();
+
+            button.disabled = true;
+            button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Starting...';
+            jobItem.classList.add('is-running'); // Optimistic UI update
+
             window.electronAPI.startJob(jobId);
         }
     } else if (button.classList.contains('btn-view-errors')) {

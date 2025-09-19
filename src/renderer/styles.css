@@ -216,6 +216,7 @@ input:checked + .slider:before { transform: translateX(20px); }
   flex-wrap: nowrap;
   gap: var(--spacing-md);
   overflow: hidden;
+  height: 1.2em; /* Prevents vertical resizing */
 }
 .status-text {
   white-space: nowrap;
