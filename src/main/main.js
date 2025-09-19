@@ -1,4 +1,6 @@
+
 const { app, BrowserWindow, Menu, ipcMain, dialog, powerSaveBlocker } = require('electron');
+const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs/promises');
 const WindowState = require('electron-window-state');
@@ -133,6 +135,8 @@ ipcMain.handle('dialog:openJson', async () => {
 
 ipcMain.handle('jobs:get', () => store.get('jobs', []));
 ipcMain.handle('jobs:set', (event, jobs) => store.set('jobs', jobs));
+ipcMain.handle('jobErrors:get', () => store.get('jobErrors', {}));
+ipcMain.handle('jobErrors:set', (event, errors) => store.set('jobErrors', errors));
 ipcMain.handle('settings:get', () => store.get('settings', { autoCleanup: false, loggingEnabled: true, preventSleep: false }));
 ipcMain.handle('settings:set', (event, settings) => {
     if (typeof settings.loggingEnabled !== 'undefined') {
@@ -240,6 +244,11 @@ ipcMain.on('job:start', async (event, jobId) => {
     if (!job) return;
 
     try {
+        // Clear any persisted errors for this job from the previous run.
+        const allErrors = store.get('jobErrors', {});
+        delete allErrors[jobId];
+        store.set('jobErrors', allErrors);
+
         if (runningJobsInMain.size === 0) {
             const settings = store.get('settings', {});
             if (settings.preventSleep) {
@@ -337,6 +346,7 @@ ipcMain.on('job:start', async (event, jobId) => {
             }
 
             const relativePath = toCopy[i];
+            const sourceEntry = sourceEntries.get(relativePath);
 
             const elapsedTime = Date.now() - copyStartTime;
             const copySpeed = elapsedTime > 500 && copiedSize > 0 ? copiedSize / elapsedTime : 0; // bytes/ms
@@ -350,10 +360,18 @@ ipcMain.on('job:start', async (event, jobId) => {
 
             sendUpdate('Copying', totalCopySize > 0 ? (copiedSize / totalCopySize) * 100 : 0, `Copying file ${i + 1} of ${toCopy.length}: ${relativePath}`, updatePayload);
             try {
+                const sourcePath = path.join(job.source, relativePath);
                 const destPath = path.join(job.destination, relativePath);
                 await fs.mkdir(path.dirname(destPath), { recursive: true });
-                await fs.copyFile(path.join(job.source, relativePath), destPath);
-                copiedSize += sourceEntries.get(relativePath).size;
+                await fs.copyFile(sourcePath, destPath);
+
+                // Preserve the modification time from the source file to ensure accurate change detection on the next run.
+                if (sourceEntry) {
+                    const sourceMtime = new Date(sourceEntry.mtime);
+                    await fs.utimes(destPath, sourceMtime, sourceMtime);
+                }
+                
+                copiedSize += sourceEntry.size;
             } catch (error) {
                 const errorMessage = `Failed to copy: ${relativePath}. ${error.message}`;
                 copyErrors.push({ path: relativePath, error: error.message });
@@ -366,6 +384,13 @@ ipcMain.on('job:start', async (event, jobId) => {
             sendUpdate('Stopped', 100, 'Job stopped by user.');
             stopFlags.delete(jobId);
             return;
+        }
+
+        // If there were errors, persist them for the next session.
+        if (copyErrors.length > 0) {
+            const allErrors = store.get('jobErrors', {});
+            allErrors[jobId] = copyErrors;
+            store.set('jobErrors', allErrors);
         }
 
         let finalStatus = copyErrors.length > 0 ? 'DoneWithErrors' : 'Done';
@@ -427,4 +452,20 @@ ipcMain.on('job:cleanup', async (event, { jobId, files }) => {
     }
     const result = await performCleanup(job, files);
     mainWindow.webContents.send('job:cleanup-complete', { jobId, ...result });
+});
+
+ipcMain.on('system:shutdown', () => {
+    logToRenderer('WARN', 'Shutdown command received. Shutting down the system.');
+    const command = process.platform === 'win32' ? 'shutdown /s /t 0' : 'shutdown -h now';
+    exec(command, (error, stdout, stderr) => {
+        if (error) {
+            logToRenderer('ERROR', `Shutdown failed: ${error.message}`);
+            return;
+        }
+        if (stderr) {
+            logToRenderer('ERROR', `Shutdown stderr: ${stderr}`);
+            return;
+        }
+        logToRenderer('INFO', `Shutdown stdout: ${stdout}`);
+    });
 });

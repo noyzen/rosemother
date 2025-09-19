@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const jobForm = document.getElementById('job-form');
   const modalTitle = document.getElementById('modal-title');
   const jobIdInput = document.getElementById('job-id-input');
+  const jobNameInput = document.getElementById('job-name');
   const sourcePathInput = document.getElementById('source-path');
   const destPathInput = document.getElementById('dest-path');
   
@@ -34,6 +35,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const importJobsBtn = document.getElementById('import-jobs-btn');
   const autoCleanupToggle = document.getElementById('auto-cleanup-toggle');
   const preventSleepToggle = document.getElementById('prevent-sleep-toggle');
+  const shutdownOnCompletionToggle = document.getElementById('shutdown-on-completion-toggle');
+
+  // Shutdown Modal Elements
+  const shutdownConfirmModal = document.getElementById('shutdown-confirm-modal');
+  const shutdownCountdownTimer = document.getElementById('shutdown-countdown-timer');
+  const cancelShutdownBtn = document.getElementById('cancel-shutdown-btn');
 
   let jobs = [];
   let appSettings = { autoCleanup: false, loggingEnabled: true, preventSleep: false };
@@ -43,6 +50,10 @@ document.addEventListener('DOMContentLoaded', () => {
   let isBatchRunning = false;
   let jobErrors = {};
   let runningJobs = new Set();
+  
+  // Session-only state
+  let shutdownOnCompletion = false;
+  let shutdownInterval = null;
   
   // --- Logging System ---
   let logs = [];
@@ -161,66 +172,62 @@ document.addEventListener('DOMContentLoaded', () => {
     jobsListEl.classList.toggle('hidden', !hasJobs);
     startAllBtn.classList.toggle('hidden', !hasJobs);
     
-    // To avoid re-rendering everything on drag/drop, we can be smarter,
-    // but for this app's scale, a full re-render is simple and effective.
-    const activeState = new Map();
-    document.querySelectorAll('.job-item').forEach(el => {
-        activeState.set(el.dataset.id, {
-            innerHTML: el.innerHTML,
-            classes: el.className
-        });
-    });
-
     jobsListEl.innerHTML = '';
 
     if (hasJobs) {
       jobs.forEach(job => {
         const hasPendingCleanup = pendingCleanups[job.id] && pendingCleanups[job.id].length > 0;
+        const hasPersistedErrors = jobErrors[job.id] && jobErrors[job.id].length > 0;
+        
+        let idleMessage = 'Idle';
+        if (hasPendingCleanup) {
+            idleMessage = `${pendingCleanups[job.id].length} item(s) pending cleanup.`;
+        } else if (hasPersistedErrors) {
+            idleMessage = 'Last run finished with errors';
+        }
+        
         const jobEl = document.createElement('div');
         jobEl.className = 'job-item';
+        if (hasPersistedErrors) {
+            jobEl.classList.add('is-warning');
+        }
         jobEl.dataset.id = job.id;
         jobEl.draggable = true;
 
-        const previousState = activeState.get(job.id);
-        if (previousState && !isBatchRunning && runningJobs.size === 0) {
-             jobEl.innerHTML = previousState.innerHTML;
-             jobEl.className = previousState.classes;
-        } else {
-            jobEl.innerHTML = `
-                <div class="job-drag-handle" title="Drag to reorder"><i class="fa-solid fa-grip-vertical"></i></div>
-                <div class="job-content">
-                    <div class="job-paths">
-                        <div class="path-display">
-                            <i class="fa-regular fa-folder-open source-icon"></i>
-                            <span class="path-text" title="${job.source}">${job.source}</span>
-                        </div>
-                        <div class="path-arrow-container">
-                            <i class="fa-solid fa-arrow-down-long path-arrow"></i>
-                        </div>
-                        <div class="path-display">
-                            <i class="fa-solid fa-server dest-icon"></i>
-                            <span class="path-text" title="${job.destination}">${job.destination}</span>
-                        </div>
+        jobEl.innerHTML = `
+            <div class="job-drag-handle" title="Drag to reorder"><i class="fa-solid fa-grip-vertical"></i></div>
+            <div class="job-content">
+                <div class="job-header">
+                    <h3 class="job-name">${job.name || 'Untitled Job'}</h3>
+                    <div class="job-actions">
+                        <button class="btn-icon btn-view-errors ${hasPersistedErrors ? '' : 'hidden'}" title="View Errors"><i class="fa-solid fa-triangle-exclamation"></i></button>
+                        <button class="btn-icon btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" title="Cleanup Files"><i class="fa-solid fa-broom"></i></button>
+                        <button class="btn-icon btn-start-stop" title="Start Backup"><i class="fa-solid fa-play"></i></button>
+                        <button class="btn-icon btn-edit" title="Edit Job"><i class="fa-solid fa-pencil"></i></button>
+                        <button class="btn-icon btn-delete" title="Delete Job"><i class="fa-solid fa-trash-can"></i></button>
                     </div>
-                    <div class="job-details">
-                        <div class="job-status">
-                            <span class="status-text">${hasPendingCleanup ? `${pendingCleanups[job.id].length} item(s) pending cleanup.` : 'Idle'}</span>
-                            <span class="status-eta hidden"></span>
-                            <span class="status-warning hidden"></span>
-                            <div class="progress-bar-container">
-                                <div class="progress-bar"></div>
-                            </div>
-                        </div>
-                        <div class="job-actions">
-                            <button class="btn-icon btn-view-errors hidden" aria-label="View Errors"><i class="fa-solid fa-triangle-exclamation"></i></button>
-                            <button class="btn-icon btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" aria-label="Cleanup Files"><i class="fa-solid fa-broom"></i></button>
-                            <button class="btn-icon btn-start-stop" aria-label="Start Backup"><i class="fa-solid fa-play"></i></button>
-                            <button class="btn-icon btn-edit" aria-label="Edit Job"><i class="fa-solid fa-pencil"></i></button>
-                            <button class="btn-icon btn-delete" aria-label="Delete Job"><i class="fa-solid fa-trash-can"></i></button>
-                        </div>
+                </div>
+                <div class="job-paths">
+                    <div class="path-display" title="${job.source}">
+                        <i class="fa-regular fa-folder-open source-icon"></i>
+                        <span class="path-text">${job.source}</span>
                     </div>
-                </div>`;
-        }
+                    <div class="path-display" title="${job.destination}">
+                        <i class="fa-solid fa-server dest-icon"></i>
+                        <span class="path-text">${job.destination}</span>
+                    </div>
+                </div>
+                <div class="job-footer">
+                     <div class="job-status">
+                         <span class="status-text">${idleMessage}</span>
+                         <span class="status-eta hidden"></span>
+                         <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${jobErrors[job.id].length} file(s) failed` : ''}</span>
+                    </div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar"></div>
+                    </div>
+                </div>
+            </div>`;
         jobsListEl.appendChild(jobEl);
       });
     }
@@ -230,12 +237,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const saveJobs = async () => {
     await window.electronAPI.setJobs(jobs);
     addLog('INFO', `Job configurations saved. Total jobs: ${jobs.length}.`);
-    renderJobs();
-  };
-
-  const loadJobs = async () => {
-    jobs = await window.electronAPI.getJobs();
-    addLog('INFO', `Loaded ${jobs.length} jobs from storage.`);
     renderJobs();
   };
 
@@ -271,13 +272,16 @@ document.addEventListener('DOMContentLoaded', () => {
     if (job) {
       modalTitle.textContent = 'Edit Backup Job';
       jobIdInput.value = job.id;
+      jobNameInput.value = job.name || '';
       sourcePathInput.value = job.source;
       destPathInput.value = job.destination;
     } else {
       modalTitle.textContent = 'New Backup Job';
       jobIdInput.value = '';
+      jobNameInput.value = '';
     }
     jobModal.classList.remove('hidden');
+    jobNameInput.focus();
   };
   
   const closeJobModal = () => jobModal.classList.add('hidden');
@@ -333,7 +337,7 @@ document.addEventListener('DOMContentLoaded', () => {
                  Object.entries(data).forEach(([jobId, files]) => {
                     if (files.length === 0) return;
                     const job = jobs.find(j => j.id === jobId);
-                    const jobName = job ? `${job.source.split(/[\\/]/).pop()} → ${job.destination.split(/[\\/]/).pop()}` : 'Unknown Job';
+                    const jobName = job ? job.name : 'Unknown Job';
                     const header = document.createElement('li');
                     header.className = 'confirm-job-header';
                     header.innerHTML = `<strong>${jobName}</strong> (${files.length} items)`;
@@ -395,9 +399,15 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     const id = jobIdInput.value;
     const newJobData = {
+      name: jobNameInput.value.trim(),
       source: sourcePathInput.value,
       destination: destPathInput.value
     };
+
+    if (!newJobData.name) {
+        alert('Job Name is required.');
+        return;
+    }
 
     if (!newJobData.source || !newJobData.destination) {
         alert('Source and Destination folders must be selected.');
@@ -407,11 +417,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (id) { // Editing
       const index = jobs.findIndex(job => job.id === id);
       jobs[index] = { ...jobs[index], ...newJobData };
-      addLog('INFO', `Job ${id} has been edited.`);
+      addLog('INFO', `Job "${newJobData.name}" has been edited.`);
     } else { // Adding
       const newId = `job_${Date.now()}`;
       jobs.push({ id: newId, ...newJobData });
-      addLog('INFO', `New job ${newId} has been added.`);
+      addLog('INFO', `New job "${newJobData.name}" has been added.`);
     }
     saveJobs();
     closeJobModal();
@@ -512,12 +522,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const job = jobs.find(j => j.id === jobId);
         openJobModal(job);
     } else if (button.classList.contains('btn-delete')) {
-        const confirmed = await showConfirm('Delete Job', 'Are you sure you want to permanently delete this job configuration?', 'danger');
+        const job = jobs.find(j => j.id === jobId);
+        const confirmed = await showConfirm(`Delete "${job.name}"?`, 'Are you sure you want to permanently delete this job configuration?', 'danger');
         if (confirmed) {
             jobs = jobs.filter(j => j.id !== jobId);
             delete pendingCleanups[jobId];
             delete jobErrors[jobId];
-            addLog('WARN', `Job ${jobId} has been deleted.`);
+            addLog('WARN', `Job "${job.name}" has been deleted.`);
+            await window.electronAPI.setJobErrors(jobErrors);
             saveJobs();
         }
     } else if (button.classList.contains('btn-cleanup')) {
@@ -537,12 +549,53 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // --- Shutdown Logic ---
+  const initiateShutdown = () => {
+    let countdown = 10;
+    shutdownCountdownTimer.textContent = countdown;
+    shutdownConfirmModal.classList.remove('hidden');
+    addLog('WARN', 'All jobs completed. System shutdown initiated with a 10-second countdown.');
+
+    shutdownInterval = setInterval(() => {
+        countdown--;
+        shutdownCountdownTimer.textContent = countdown;
+        if (countdown <= 0) {
+            clearInterval(shutdownInterval);
+            shutdownInterval = null;
+            addLog('WARN', 'Countdown finished. Executing system shutdown.');
+            window.electronAPI.executeShutdown();
+        }
+    }, 1000);
+  };
+
+  const cancelShutdown = () => {
+    if (shutdownInterval) {
+        clearInterval(shutdownInterval);
+        shutdownInterval = null;
+    }
+    shutdownConfirmModal.classList.add('hidden');
+    addLog('INFO', 'System shutdown was canceled by the user.');
+  };
+
+  cancelShutdownBtn.addEventListener('click', cancelShutdown);
+  shutdownOnCompletionToggle.addEventListener('change', e => {
+    shutdownOnCompletion = e.target.checked;
+    if (shutdownOnCompletion) {
+        addLog('WARN', 'Shutdown on completion has been enabled for this session.');
+    } else {
+        addLog('INFO', 'Shutdown on completion has been disabled.');
+    }
+  });
+
   const processJobQueue = () => {
     if (jobQueue.length === 0) {
         isBatchRunning = false;
         startAllBtn.disabled = false;
         startAllBtn.innerHTML = '<i class="fa-solid fa-play-circle"></i> Start All';
         addLog('SUCCESS', 'Batch run for all jobs completed.');
+        if (shutdownOnCompletion) {
+            initiateShutdown();
+        }
         return;
     }
     const jobId = jobQueue.shift();
@@ -584,13 +637,12 @@ document.addEventListener('DOMContentLoaded', () => {
   autoCleanupToggle.addEventListener('change', saveSettings);
   preventSleepToggle.addEventListener('change', saveSettings);
 
-
   exportJobsBtn.addEventListener('click', async () => {
     addLog('INFO', 'Attempting to export jobs...');
     const exportData = {
         version: '1.0.0',
         rosemother_export: true,
-        jobs: jobs.map(({ source, destination }) => ({ source, destination })),
+        jobs: jobs.map(({ name, source, destination }) => ({ name, source, destination })),
     };
     const { success, error } = await window.electronAPI.saveJsonDialog(JSON.stringify(exportData, null, 2));
     if (!success && error !== 'Save dialog canceled.') {
@@ -624,6 +676,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!alreadyExists) {
                     jobs.push({
                         id: `job_${Date.now()}_${importedCount}`,
+                        name: importedJob.name || `Imported Job ${importedCount + 1}`,
                         source: importedJob.source,
                         destination: importedJob.destination
                     });
@@ -674,12 +727,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isRunning) {
       runningJobs.add(jobId);
       startStopBtn.innerHTML = '<i class="fa-solid fa-stop"></i>';
-      startStopBtn.setAttribute('aria-label', 'Stop Backup');
+      startStopBtn.setAttribute('title', 'Stop Backup');
       startStopBtn.classList.add('is-stop');
     } else {
       runningJobs.delete(jobId);
       startStopBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
-      startStopBtn.setAttribute('aria-label', 'Start Backup');
+      startStopBtn.setAttribute('title', 'Start Backup');
       startStopBtn.classList.remove('is-stop');
     }
 
@@ -694,7 +747,7 @@ document.addEventListener('DOMContentLoaded', () => {
       jobErrors[jobId] = payload.copyErrors;
       jobEl.classList.add('is-warning');
       viewErrorsBtn.classList.remove('hidden');
-      statusWarning.textContent = `${payload.copyErrors.length} file(s) failed to copy.`;
+      statusWarning.textContent = `${payload.copyErrors.length} file(s) failed.`;
       statusWarning.classList.remove('hidden');
     } else if (status !== 'Copying') { // Don't clear warnings while copying
       jobEl.classList.remove('is-warning');
@@ -731,10 +784,19 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       setTimeout(() => {
         jobEl.classList.remove('is-error', 'is-done');
-        if (!Object.keys(pendingCleanups).includes(jobId) && !Object.keys(jobErrors).includes(jobId)) {
-          statusText.textContent = 'Idle';
-          progressBar.style.width = '0%';
+        const hasPersistedErrors = jobErrors[jobId] && jobErrors[jobId].length > 0;
+        const hasPendingCleanup = pendingCleanups[jobId] && pendingCleanups[jobId].length > 0;
+        
+        if (hasPendingCleanup) {
+            statusText.textContent = `${pendingCleanups[jobId].length} item(s) pending cleanup.`;
+        } else if (hasPersistedErrors) {
+            statusText.textContent = 'Last run finished with errors';
+            jobEl.classList.add('is-warning');
+        } else {
+            statusText.textContent = 'Idle';
+            progressBar.style.width = '0%';
         }
+
       }, 8000);
     }
   });
@@ -772,6 +834,14 @@ document.addEventListener('DOMContentLoaded', () => {
     addLog(level, message);
   });
 
-  loadSettings();
-  loadJobs();
+  async function initializeApp() {
+    await loadSettings();
+    jobs = await window.electronAPI.getJobs();
+    addLog('INFO', `Loaded ${jobs.length} jobs from storage.`);
+    jobErrors = await window.electronAPI.getJobErrors();
+    addLog('INFO', `Loaded ${Object.keys(jobErrors).length} persisted job error logs.`);
+    renderJobs();
+  }
+
+  initializeApp();
 });

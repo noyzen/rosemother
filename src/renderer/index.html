@@ -12,7 +12,7 @@
 <body>
   <div id="app-container">
     <header id="app-header">
-      <h1><i class="fa-solid fa-shield-heart"></i> Rosemother</h1>
+      <h1><i class="fa-solid fa-shield-halved"></i> Rosemother</h1>
       <div id="header-actions">
         <button id="log-btn" class="btn btn-secondary" aria-label="Show Logs">
           <i class="fa-solid fa-file-lines"></i> Logs
@@ -39,8 +39,8 @@
       <div id="jobs-list"></div>
       <div id="empty-state" class="hidden">
         <div class="empty-icon"><i class="fa-solid fa-folder-plus"></i></div>
-        <h2>No Backup Jobs</h2>
-        <p>Click "New Job" to create your first backup.</p>
+        <h2>No Backup Jobs Created</h2>
+        <p>Click "New Job" to set up your first backup.</p>
       </div>
     </main>
   </div>
@@ -51,6 +51,10 @@
       <h2 id="modal-title">New Backup Job</h2>
       <form id="job-form">
         <input type="hidden" id="job-id-input" />
+        <div class="form-group">
+            <label for="job-name">Job Name</label>
+            <input type="text" id="job-name" placeholder="e.g., My Documents Backup" required />
+        </div>
         <div class="form-group">
           <label for="source-path">Source Folder</label>
           <div class="path-input-group">
@@ -147,6 +151,28 @@
               <p class="setting-description">Prevents the computer from entering sleep or idle mode while a backup job is running.</p>
             </div>
           </div>
+          <div class="form-group-row">
+            <label for="shutdown-on-completion-toggle" class="setting-label">Shutdown on Completion</label>
+            <div class="form-group-control">
+              <label class="toggle-switch">
+                <input type="checkbox" id="shutdown-on-completion-toggle">
+                <span class="slider"></span>
+              </label>
+              <p class="setting-description">If enabled, the computer will automatically shut down after all jobs in a batch run are completed. This setting is not saved and must be enabled each session.</p>
+            </div>
+          </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shutdown Confirmation Modal -->
+  <div id="shutdown-confirm-modal" class="modal-overlay hidden">
+    <div class="modal-content confirm-dialog">
+      <h2 id="shutdown-confirm-title">Shutdown Pending</h2>
+      <p>All jobs have completed. The system will shut down in...</p>
+      <div id="shutdown-countdown-timer">10</div>
+      <div class="modal-actions">
+        <button type="button" id="cancel-shutdown-btn" class="btn btn-secondary">Cancel Shutdown</button>
       </div>
     </div>
   </div>
