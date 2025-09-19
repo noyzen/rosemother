@@ -226,7 +226,34 @@ async function countFiles(startPath, jobId, job = null) {
     return fileCount;
 }
 
-// Backup Logic
+function robustDelete(fullPath) {
+    return new Promise((resolve, reject) => {
+        // Safety check to prevent deleting critical paths
+        if (!fullPath || fullPath === '/' || fullPath.length < 3) {
+            return reject(new Error(`Deletion of unsafe path rejected: ${fullPath}`));
+        }
+
+        const quotedPath = `"${fullPath}"`;
+        const isWindows = process.platform === 'win32';
+        
+        // This command will delete a file, or recursively delete a directory. It's designed to succeed even if the path doesn't exist.
+        const command = isWindows 
+            ? `(if exist ${quotedPath} ( (del /f /q ${quotedPath} 2>nul & rmdir /s /q ${quotedPath} 2>nul) || (rmdir /s /q ${quotedPath} 2>nul) ))`
+            : `rm -rf ${quotedPath}`;
+        
+        exec(command, (error, stdout, stderr) => {
+            if (error) {
+                // This block should only be hit on serious issues like permission errors.
+                console.error(`[EXEC ERROR] robustDelete failed for path "${fullPath}". Error: ${error.message}`);
+                if (stderr) console.error(`[EXEC STDERR] ${stderr}`);
+                reject(error);
+            } else {
+                resolve();
+            }
+        });
+    });
+}
+
 async function performCleanup(job, items, progressCallback) {
     if (!job || !items || items.length === 0) {
         return { success: false, error: "Job or items to clean not found." };
@@ -234,15 +261,25 @@ async function performCleanup(job, items, progressCallback) {
     console.log(`[INFO] Starting cleanup for job ${job.id}. Deleting ${items.length} items.`);
 
     try {
-        // Sort all items by path depth, deepest first. This ensures children are deleted before parents,
-        // which is a robust strategy even with recursive deletion.
+        // Sort items by path depth, deepest first. This ensures children are processed before parents,
+        // which is a safe and orderly approach even with recursive deletion.
         items.sort((a, b) => b.path.split(path.sep).length - a.path.split(path.sep).length);
 
         const totalCount = items.length;
         let processedCount = 0;
         const errors = [];
+        
+        // Since `robustDelete` on a parent directory will also delete its children, we can optimize
+        // by only deleting the highest-level orphan paths.
+        const processedPaths = new Set();
 
         for (const item of items) {
+            // Check if this item is inside a directory we've already handled.
+            const isAlreadyHandled = [...processedPaths].some(p => item.path.startsWith(p + path.sep));
+            if(isAlreadyHandled) {
+                continue;
+            }
+
             processedCount++;
             if (stopFlags.has(job.id)) {
                 console.warn(`[WARN] Cleanup for job ${job.id} was stopped.`);
@@ -250,7 +287,6 @@ async function performCleanup(job, items, progressCallback) {
             }
 
             const progress = totalCount > 0 ? (processedCount / totalCount) * 100 : 100;
-            // The message can still use the originally detected type for better UI feedback.
             const message = `Deleting ${item.type} ${processedCount} of ${totalCount}`;
             if (progressCallback) {
                 progressCallback(progress, message);
@@ -258,12 +294,11 @@ async function performCleanup(job, items, progressCallback) {
 
             const fullPath = path.join(job.destination, item.path);
             try {
-                // Use a single, robust recursive delete for EVERYTHING.
-                // `force: true` ignores "not found" errors (e.g., child of an already-deleted dir).
-                // `recursive: true` handles both files and directories, resolving all EISDIR and ENOTEMPTY issues.
-                await fs.rm(fullPath, { recursive: true, force: true });
+                // Use the new robust shell-based deletion.
+                await robustDelete(fullPath);
+                processedPaths.add(item.path); // Mark this path as handled.
             } catch (err) {
-                // With force:true and recursive:true, the only errors we expect are from permissions, etc.
+                // If robustDelete fails, it's likely a permissions issue.
                 errors.push({ path: item.path, error: err.message });
             }
         }
