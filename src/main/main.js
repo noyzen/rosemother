@@ -411,12 +411,24 @@ ipcMain.on('job:start', async (event, jobId) => {
     }
 
     const settings = store.get('settings', { preventSleep: false, autoCleanup: false });
-    const sendUpdate = (status, progress, message, payload) => sendUpdateForJob(jobId, status, progress, message, payload);
-
+    
     const indexesPath = path.join(app.getPath('userData'), 'job_indexes');
     await fs.mkdir(indexesPath, { recursive: true });
     const indexFilePath = path.join(indexesPath, `${job.id}.json`);
     const tempIndexFilePath = `${indexFilePath}.tmp`;
+
+    // --- Reliable Index Rebuilding ---
+    // 1. Load the old index ONLY to get cached hashes.
+    const oldIndexWithHashes = await loadIndex(indexFilePath);
+    const isFirstRun = Object.keys(oldIndexWithHashes).length === 0;
+    let firstRunHintSent = false;
+    const sendUpdate = (status, progress, message, payload = {}) => {
+        if (isFirstRun && !firstRunHintSent) {
+            payload.isFirstRun = true;
+            firstRunHintSent = true;
+        }
+        sendUpdateForJob(jobId, status, progress, message, payload);
+    };
 
     let destIndex = {};
     
@@ -464,10 +476,6 @@ ipcMain.on('job:start', async (event, jobId) => {
             console.error(`[ERROR] Job ${jobId} failed: ${errorMessage}`);
             return;
         }
-
-        // --- Reliable Index Rebuilding ---
-        // 1. Load the old index ONLY to get cached hashes.
-        const oldIndexWithHashes = await loadIndex(indexFilePath);
 
         // 2. Always rebuild the index from what's currently on disk for reliability.
         destIndex = {};

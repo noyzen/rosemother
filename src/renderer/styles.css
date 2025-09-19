@@ -97,6 +97,30 @@ body {
 .action-separator { width: 1px; height: 24px; background-color: var(--border-primary); }
 
 
+/* --- Info Banner --- */
+.info-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background-color: rgba(56, 139, 253, 0.15);
+  color: var(--accent-primary);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-primary);
+  flex-shrink: 0;
+}
+.info-banner p {
+  margin: 0;
+  flex-grow: 1;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+.info-banner > i {
+  font-size: 1.2rem;
+}
+.info-banner .btn-icon:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
 /* --- Buttons --- */
 .btn {
   border: 1px solid var(--border-primary);
@@ -356,7 +380,7 @@ input[type="text"][readonly] {
 .confirm-dialog p { line-height: 1.6; color: var(--text-secondary); margin: 0; }
 #confirm-details-container {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: var(--spacing-lg);
   margin-top: var(--spacing-lg);
   padding-top: var(--spacing-lg);
@@ -386,7 +410,7 @@ input[type="text"][readonly] {
   margin: 0;
   overflow-y: auto;
   flex-grow: 1;
-  max-height: 30vh;
+  max-height: 20vh;
 }
 .confirm-column li {
   padding: 4px 8px;

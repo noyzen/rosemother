@@ -7,6 +7,8 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Header buttons
   const settingsBtn = document.getElementById('settings-btn');
+  const firstRunInfoBanner = document.getElementById('first-run-info');
+  const closeFirstRunInfoBtn = document.getElementById('close-first-run-info');
 
   // Modals
   const jobModal = document.getElementById('job-modal');
@@ -410,6 +412,7 @@ document.addEventListener('DOMContentLoaded', () => {
   addJobBtn.addEventListener('click', () => openJobModal());
   document.getElementById('cancel-job-btn').addEventListener('click', closeJobModal);
   document.getElementById('close-job-btn').addEventListener('click', closeJobModal);
+  closeFirstRunInfoBtn.addEventListener('click', () => firstRunInfoBanner.classList.add('hidden'));
   
   document.querySelectorAll('.path-selector-box').forEach(box => {
     box.addEventListener('click', async (e) => {
@@ -838,6 +841,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const { jobId, status, progress, message, payload } = data;
     if (jobId !== activeJobId) return;
 
+    if (payload?.isFirstRun) {
+        firstRunInfoBanner.classList.remove('hidden');
+    }
+
     const jobEl = document.querySelector(`.job-item[data-id="${jobId}"]`);
     if (!jobEl) return;
 
@@ -875,6 +882,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // --- Full Re-render Logic for final states ---
+    firstRunInfoBanner.classList.add('hidden'); // Hide banner when job is done/stopped/errored
     if (payload?.filesToDelete?.length > 0) {
         const showCleanupButton = !appSettings.autoCleanup || status !== 'Done';
         if (showCleanupButton) {
