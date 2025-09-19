@@ -1,5 +1,7 @@
 # Rosemother Backup Utility
 
+![Rosemother Screenshot](https://i.imgur.com/o9jtRo9.jpeg)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-brightgreen.svg)](package.json)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#)
