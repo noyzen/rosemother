@@ -228,7 +228,7 @@ document.addEventListener('DOMContentLoaded', () => {
   
   const closeJobModal = () => jobModal.classList.add('hidden');
 
-  const showConfirm = (title, message, okClass = 'btn-danger', cleanupData = null) => {
+  const showConfirm = (title, message, okClass = 'danger', cleanupData = null) => {
     return new Promise(resolve => {
         confirmTitle.textContent = title;
         confirmMessage.textContent = message;
@@ -280,7 +280,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const okBtn = document.getElementById('confirm-ok-btn');
-        okBtn.className = `btn-${okClass.startsWith('btn-') ? okClass : `btn-${okClass}`}`;
+        okBtn.className = `btn btn-${okClass}`;
         
         document.getElementById('confirm-cancel-btn').classList.toggle('hidden', okClass === 'info');
         okBtn.textContent = okClass === 'info' ? 'Close' : 'OK';

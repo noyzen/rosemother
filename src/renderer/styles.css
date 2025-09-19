@@ -79,7 +79,7 @@ body {
 
 
 /* --- Buttons --- */
-.btn-primary, .btn-secondary, .btn-danger {
+.btn {
   border: none;
   padding: 8px 16px;
   border-radius: 6px;
@@ -98,7 +98,10 @@ body {
 .btn-secondary:hover { background: #4a4a4a; }
 .btn-danger { background: var(--accent-red); color: white; }
 .btn-danger:hover { background: var(--accent-red-hover); }
-.btn-primary i, .btn-secondary i, .btn-danger i { margin-right: 8px; }
+.btn-info { background: var(--accent-blue); color: white; }
+.btn-info:hover { background: var(--accent-blue-hover); }
+
+.btn i { margin-right: 8px; }
 button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -307,6 +310,9 @@ input:checked + .slider:before {
   margin-top: 24px;
 }
 /* Confirmation dialog */
+#confirm-modal {
+  z-index: 1001;
+}
 .confirm-dialog p {
   line-height: 1.6;
   color: var(--fg-light);
