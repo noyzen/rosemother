@@ -6,8 +6,7 @@
 
 A simple, powerful, and reliable file mirror backup utility built with Electron. Rosemother ensures your destination folder is an exact replica of your source, providing peace of mind for your valuable data.
 
-<!-- It is highly recommended to add a screenshot or a GIF of the application here. -->
-<!-- Example: ![Rosemother Screenshot](./rosemother_screenshot.png) -->
+
 
 ---
 
