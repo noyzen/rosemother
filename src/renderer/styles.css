@@ -168,7 +168,7 @@ input:checked + .slider:before { transform: translateX(20px); }
 .job-paths-container { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-md); }
 .job-path-block { flex: 1; min-width: 0; background-color: var(--bg-main); padding: var(--spacing-sm) var(--spacing-md); border-radius: var(--border-radius-md); border: 1px solid var(--border-primary); }
 .job-path-label { font-size: 0.65rem; font-weight: 700; color: var(--text-tertiary); letter-spacing: 0.5px; margin-bottom: 6px; }
-.job-path-arrow { font-size: 1.75rem; color: var(--border-primary); flex-shrink: 0; }
+.job-path-arrow { font-size: 1.75rem; color: var(--text-secondary); flex-shrink: 0; }
 .path-display { display: flex; align-items: center; gap: var(--spacing-sm); }
 .path-display i { color: var(--text-tertiary); width: 16px; text-align: center; font-size: 0.9em; }
 .source-icon { color: var(--accent-primary); }
