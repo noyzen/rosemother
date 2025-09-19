@@ -34,10 +34,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const importJobsBtn = document.getElementById('import-jobs-btn');
   const autoCleanupToggle = document.getElementById('auto-cleanup-toggle');
   const preventSleepToggle = document.getElementById('prevent-sleep-toggle');
-  const cpuUsageSelect = document.getElementById('cpu-usage-select');
 
   let jobs = [];
-  let appSettings = { autoCleanup: false, loggingEnabled: true, preventSleep: false, cpuUsage: 'normal' };
+  let appSettings = { autoCleanup: false, loggingEnabled: true, preventSleep: false };
   let confirmCallback = null;
   let pendingCleanups = {};
   let jobQueue = [];
@@ -246,13 +245,11 @@ document.addEventListener('DOMContentLoaded', () => {
         autoCleanup: false,
         loggingEnabled: true,
         preventSleep: false,
-        cpuUsage: 'normal',
         ...storedSettings
     };
     autoCleanupToggle.checked = appSettings.autoCleanup;
     loggingEnabledToggle.checked = appSettings.loggingEnabled;
     preventSleepToggle.checked = appSettings.preventSleep;
-    cpuUsageSelect.value = appSettings.cpuUsage;
     addLog('INFO', `Settings loaded (Auto Cleanup: ${appSettings.autoCleanup}, Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}).`);
   };
 
@@ -260,7 +257,6 @@ document.addEventListener('DOMContentLoaded', () => {
     appSettings.autoCleanup = autoCleanupToggle.checked;
     appSettings.loggingEnabled = loggingEnabledToggle.checked;
     appSettings.preventSleep = preventSleepToggle.checked;
-    appSettings.cpuUsage = cpuUsageSelect.value;
     await window.electronAPI.setSettings(appSettings);
     addLog('INFO', `Settings saved (Auto Cleanup: ${appSettings.autoCleanup}, Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}).`);
   };
@@ -587,7 +583,6 @@ document.addEventListener('DOMContentLoaded', () => {
   
   autoCleanupToggle.addEventListener('change', saveSettings);
   preventSleepToggle.addEventListener('change', saveSettings);
-  cpuUsageSelect.addEventListener('change', saveSettings);
 
 
   exportJobsBtn.addEventListener('click', async () => {

@@ -5,7 +5,7 @@ const WindowState = require('electron-window-state');
 const Store = require('electron-store');
 
 const store = new Store();
-let isLoggingEnabled = store.get('settings', { autoCleanup: false, loggingEnabled: true, preventSleep: false, cpuUsage: 'normal' }).loggingEnabled;
+let isLoggingEnabled = store.get('settings', { autoCleanup: false, loggingEnabled: true, preventSleep: false }).loggingEnabled;
 const stopFlags = new Map();
 const runningJobsInMain = new Set();
 let powerSaveBlockerId = null;
@@ -133,7 +133,7 @@ ipcMain.handle('dialog:openJson', async () => {
 
 ipcMain.handle('jobs:get', () => store.get('jobs', []));
 ipcMain.handle('jobs:set', (event, jobs) => store.set('jobs', jobs));
-ipcMain.handle('settings:get', () => store.get('settings', { autoCleanup: false, loggingEnabled: true, preventSleep: false, cpuUsage: 'normal' }));
+ipcMain.handle('settings:get', () => store.get('settings', { autoCleanup: false, loggingEnabled: true, preventSleep: false }));
 ipcMain.handle('settings:set', (event, settings) => {
     if (typeof settings.loggingEnabled !== 'undefined') {
         isLoggingEnabled = settings.loggingEnabled;
