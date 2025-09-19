@@ -30,6 +30,11 @@ if (!gotTheLock) {
 
 let mainWindow;
 
+// --- Path Normalization Helper ---
+// Ensures all internal path logic uses consistent forward slashes.
+const normalizePath = (p) => (p || '').replace(/\\/g, '/');
+
+
 function sendUpdateForJob(jobId, status, progress = 0, message = '', payload = {}) {
     if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
         mainWindow.webContents.send('job:update', { jobId, status, progress, message, payload });
@@ -157,14 +162,14 @@ ipcMain.handle('settings:set', (event, settings) => {
 function isExcluded(relativePath, jobExclusions) {
     if (!jobExclusions || !jobExclusions.enabled) return false;
 
-    const lowerCaseRelativePath = relativePath.toLowerCase();
+    const lowerCaseRelativePath = normalizePath(relativePath).toLowerCase();
 
     // Check excluded paths (case-insensitive)
-    // This now checks if the item's path starts with an excluded path.
     if (jobExclusions.paths && jobExclusions.paths.length > 0) {
         for (const excludedPath of jobExclusions.paths) {
-            const lowerCaseExcludedPath = excludedPath.toLowerCase();
-            if (lowerCaseRelativePath === lowerCaseExcludedPath || lowerCaseRelativePath.startsWith(lowerCaseExcludedPath + path.sep)) {
+            const lowerCaseExcludedPath = normalizePath(excludedPath).toLowerCase();
+            // Check for exact match or if it's a sub-path
+            if (lowerCaseRelativePath === lowerCaseExcludedPath || lowerCaseRelativePath.startsWith(lowerCaseExcludedPath + '/')) {
                 return true;
             }
         }
@@ -349,7 +354,7 @@ async function getAllRelativeDirs(startPath, jobId) {
         for (const dirent of dirents) {
             if (dirent.isDirectory()) {
                 const fullPath = path.join(currentPath, dirent.name);
-                const relativePath = path.relative(startPath, fullPath);
+                const relativePath = normalizePath(path.relative(startPath, fullPath));
                 dirs.add(relativePath);
                 queue.push(fullPath);
             }
@@ -361,7 +366,8 @@ async function getAllRelativeDirs(startPath, jobId) {
 function calculateOrphanFiles(sourcePaths, destIndex) {
     const toDelete = [];
     for (const destPath in destIndex) {
-        if (!sourcePaths.has(destPath.toLowerCase())) {
+        // Comparison is case-insensitive and uses normalized paths.
+        if (!sourcePaths.has(normalizePath(destPath).toLowerCase())) {
             toDelete.push({ path: destPath, type: 'file' });
         }
     }
@@ -519,10 +525,12 @@ ipcMain.on('job:start', async (event, jobId) => {
 
             for (const dirent of dirents) {
                 if (stopFlags.has(jobId)) return;
-                const relativePath = path.join(relativeDir, dirent.name);
+                const currentRelativePath = path.join(relativeDir, dirent.name);
+                const relativePath = normalizePath(currentRelativePath); // Normalize path
                 const fullPath = path.join(dir, dirent.name);
+                
                 if (dirent.isDirectory()) {
-                    await buildIndex(relativePath);
+                    await buildIndex(currentRelativePath);
                 } else if (dirent.isFile()) {
                     scannedFileCount++;
                     if (scannedFileCount % YIELD_THRESHOLD === 0) {
@@ -537,7 +545,7 @@ ipcMain.on('job:start', async (event, jobId) => {
                         destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs };
 
                         // 3. Carry over the hash from the old index if file metadata matches.
-                        // This avoids re-hashing the entire destination every time.
+                        // Lookup in old index must also use normalized path.
                         const oldEntry = oldIndexWithHashes[relativePath];
                         if (oldEntry && oldEntry.size === stats.size && oldEntry.mtimeMs === stats.mtimeMs && oldEntry.hash) {
                             destIndex[relativePath].hash = oldEntry.hash;
@@ -584,20 +592,21 @@ ipcMain.on('job:start', async (event, jobId) => {
                 if (index > 0 && index % YIELD_THRESHOLD === 0) {
                     await new Promise(resolve => setImmediate(resolve));
                 }
-
-                const relativePath = path.join(relativeDir, dirent.name);
+                
+                const currentRelativePath = path.join(relativeDir, dirent.name);
+                const relativePath = normalizePath(currentRelativePath); // Normalize path
                 sourcePaths.add(relativePath.toLowerCase());
                 
-                if (job.exclusions && isExcluded(relativePath, job.exclusions)) {
+                if (job.exclusions && isExcluded(currentRelativePath, job.exclusions)) { // isExcluded handles its own normalization
                     continue; // Skip excluded files and directories
                 }
                 
-                const sourcePath = path.join(job.source, relativePath);
-                const destPath = path.join(job.destination, relativePath);
+                const sourcePath = path.join(job.source, currentRelativePath);
+                const destPath = path.join(job.destination, currentRelativePath);
                 
                 if (dirent.isDirectory()) {
                     await fs.mkdir(destPath, { recursive: true }).catch(() => {});
-                    await syncDirectory(relativePath);
+                    await syncDirectory(currentRelativePath);
                 } else if (dirent.isFile()) {
                     processedFiles++; // Increment counter only for files
                     const progress = totalSourceFiles > 0 ? Math.min((processedFiles / totalSourceFiles) * 100, 100) : -1;
@@ -606,6 +615,7 @@ ipcMain.on('job:start', async (event, jobId) => {
                     try {
                         sendUpdate('Copying', progress, `Checking: ${relativePath}`, copyPayload);
                         const sourceStats = await fs.stat(sourcePath);
+                        // Lookup in destIndex must also use normalized path.
                         const destEntry = destIndex[relativePath];
 
                         let needsCopy = false;
@@ -698,7 +708,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         const orphanFiles = calculateOrphanFiles(sourcePaths, destIndex);
         const allDestDirs = await getAllRelativeDirs(job.destination, jobId);
         const orphanDirs = allDestDirs
-            .filter(dir => !sourcePaths.has(dir.toLowerCase()))
+            .filter(dir => !sourcePaths.has(dir.toLowerCase())) // allDestDirs is already normalized
             .map(p => ({ path: p, type: 'dir' }));
             
         const toDelete = [...orphanFiles, ...orphanDirs];
