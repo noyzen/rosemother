@@ -161,8 +161,8 @@ ipcMain.on('job:start', async (event, jobId) => {
     }
 
     if (toDelete.length > 0) {
-        const userChoice = await ipcMain.handle('job:confirm-delete', { jobId, files: toDelete });
-        if (userChoice.confirmed) {
+        const userChoice = await mainWindow.webContents.invoke('job:confirm-delete', { jobId, files: toDelete });
+        if (userChoice && userChoice.confirmed) {
             for (const relativePath of toDelete) {
                 const destPath = path.join(job.destination, relativePath);
                 try {
@@ -176,9 +176,14 @@ ipcMain.on('job:start', async (event, jobId) => {
                 const destDirs = Array.from(destFiles.keys()).map(f => path.dirname(f)).sort((a,b) => b.length - a.length);
                 for(const dir of [...new Set(destDirs)]){
                     const fullDirPath = path.join(job.destination, dir);
-                    const filesInDir = await fs.readdir(fullDirPath);
-                    if(filesInDir.length === 0){
-                        await fs.rmdir(fullDirPath);
+                    try {
+                        const filesInDir = await fs.readdir(fullDirPath);
+                        if(filesInDir.length === 0){
+                            await fs.rmdir(fullDirPath);
+                        }
+                    } catch (readErr) {
+                        // Ignore if directory doesn't exist anymore
+                        if (readErr.code !== 'ENOENT') console.error("Could not read directory for pruning", readErr);
                     }
                 }
             } catch(e) {
