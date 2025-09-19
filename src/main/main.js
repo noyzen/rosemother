@@ -232,9 +232,10 @@ async function performCleanup(job, items, progressCallback) {
         return { success: false, error: "Job or items to clean not found." };
     }
     console.log(`[INFO] Starting cleanup for job ${job.id}. Deleting ${items.length} items.`);
-    
+
     try {
-        // Sort all items by path depth, deepest first. This is crucial for directory deletion.
+        // Sort all items by path depth, deepest first. This ensures children are deleted before parents,
+        // which is a robust strategy even with recursive deletion.
         items.sort((a, b) => b.path.split(path.sep).length - a.path.split(path.sep).length);
 
         const totalCount = items.length;
@@ -249,6 +250,7 @@ async function performCleanup(job, items, progressCallback) {
             }
 
             const progress = totalCount > 0 ? (processedCount / totalCount) * 100 : 100;
+            // The message can still use the originally detected type for better UI feedback.
             const message = `Deleting ${item.type} ${processedCount} of ${totalCount}`;
             if (progressCallback) {
                 progressCallback(progress, message);
@@ -256,23 +258,13 @@ async function performCleanup(job, items, progressCallback) {
 
             const fullPath = path.join(job.destination, item.path);
             try {
-                // Use recursive for directories. For files, if we get EISDIR, it means it was misidentified, so retry as a directory.
-                const options = { force: true, recursive: item.type === 'dir' };
-                await fs.rm(fullPath, options);
+                // Use a single, robust recursive delete for EVERYTHING.
+                // `force: true` ignores "not found" errors (e.g., child of an already-deleted dir).
+                // `recursive: true` handles both files and directories, resolving all EISDIR and ENOTEMPTY issues.
+                await fs.rm(fullPath, { recursive: true, force: true });
             } catch (err) {
-                if (err.code === 'ENOENT') {
-                    // Item was already deleted, likely because its parent directory was deleted. This is not an error.
-                    continue;
-                } else if (err.code === 'EISDIR' && item.type === 'file') {
-                    console.warn(`[WARN] Cleanup: Item '${item.path}' was a directory, not a file. Retrying with recursive delete.`);
-                    await fs.rm(fullPath, { force: true, recursive: true }).catch(retryErr => {
-                        if (retryErr.code !== 'ENOENT') {
-                           errors.push({ path: item.path, error: `Failed to delete misclassified directory: ${retryErr.message}` });
-                        }
-                    });
-                } else {
-                    errors.push({ path: item.path, error: err.message });
-                }
+                // With force:true and recursive:true, the only errors we expect are from permissions, etc.
+                errors.push({ path: item.path, error: err.message });
             }
         }
         
