@@ -74,8 +74,46 @@ ipcMain.handle('dialog:openDirectory', async () => {
   }
 });
 
+ipcMain.handle('dialog:saveJson', async (event, content) => {
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: 'Export Jobs',
+        defaultPath: 'rosemother_jobs.json',
+        filters: [{ name: 'JSON Files', extensions: ['json'] }]
+    });
+    if (!canceled && filePath) {
+        try {
+            await fs.writeFile(filePath, content);
+            return { success: true };
+        } catch (error) {
+            console.error('Failed to save file:', error);
+            return { success: false, error: error.message };
+        }
+    }
+    return { success: false, error: 'Save dialog canceled.' };
+});
+
+ipcMain.handle('dialog:openJson', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+        title: 'Import Jobs',
+        filters: [{ name: 'JSON Files', extensions: ['json'] }],
+        properties: ['openFile']
+    });
+    if (!canceled && filePaths.length > 0) {
+        try {
+            const content = await fs.readFile(filePaths[0], 'utf-8');
+            return { success: true, content };
+        } catch (error) {
+            console.error('Failed to read file:', error);
+            return { success: false, error: error.message };
+        }
+    }
+    return { success: false, error: 'Open dialog canceled.' };
+});
+
 ipcMain.handle('jobs:get', () => store.get('jobs', []));
 ipcMain.handle('jobs:set', (event, jobs) => store.set('jobs', jobs));
+ipcMain.handle('settings:get', () => store.get('settings', { autoCleanup: false }));
+ipcMain.handle('settings:set', (event, settings) => store.set('settings', settings));
 
 // Backup Logic
 async function getFileSystemEntries(dir) {
@@ -98,6 +136,29 @@ async function getFileSystemEntries(dir) {
     return entries;
 }
 
+async function performCleanup(job, files) {
+    if (!job || !files || files.length === 0) {
+        return { success: false, error: "Job or files not found." };
+    }
+    try {
+        const filesToDelete = files.filter(item => item.type === 'file').map(item => item.path);
+        const dirsToDelete = files.filter(item => item.type === 'dir').map(item => item.path);
+
+        for (const relativePath of filesToDelete) {
+            await fs.unlink(path.join(job.destination, relativePath)).catch(err => console.error(`Failed to delete file ${relativePath}:`, err));
+        }
+
+        dirsToDelete.sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
+        for (const relativePath of dirsToDelete) {
+            await fs.rmdir(path.join(job.destination, relativePath)).catch(err => console.error(`Failed to delete directory ${relativePath}:`, err));
+        }
+        return { success: true };
+    } catch (error) {
+        console.error(`Error during cleanup for job ${job.id}:`, error);
+        return { success: false, error: error.message };
+    }
+}
+
 ipcMain.on('job:start', async (event, jobId) => {
     const jobs = store.get('jobs', []);
     const job = jobs.find(j => j.id === jobId);
@@ -118,7 +179,6 @@ ipcMain.on('job:start', async (event, jobId) => {
     sendUpdate('Scanning', 0, 'Scanning source and destination folders...');
     const [sourceEntries, destEntries] = await Promise.all([getFileSystemEntries(job.source), getFileSystemEntries(job.destination)]);
 
-    // Create missing directories
     sendUpdate('Copying', 0, 'Creating directory structure...');
     const toCreateDirs = [];
     for (const [relativePath, sourceEntry] of sourceEntries.entries()) {
@@ -126,22 +186,14 @@ ipcMain.on('job:start', async (event, jobId) => {
             toCreateDirs.push(relativePath);
         }
     }
-
-    // Sort by path depth to ensure parent directories are created first
     toCreateDirs.sort((a, b) => a.split(path.sep).length - b.split(path.sep).length);
-
     for (const relativePath of toCreateDirs) {
-        const destPath = path.join(job.destination, relativePath);
-        try {
-            await fs.mkdir(destPath, { recursive: true });
-        } catch (error) {
+        await fs.mkdir(path.join(job.destination, relativePath), { recursive: true }).catch(error => {
             sendUpdate('Error', 0, `Failed to create directory: ${relativePath}. ${error.message}`);
             return;
-        }
+        });
     }
 
-
-    // Identify files to copy
     const toCopy = [];
     let totalCopySize = 0;
     for (const [relativePath, sourceEntry] of sourceEntries.entries()) {
@@ -157,22 +209,12 @@ ipcMain.on('job:start', async (event, jobId) => {
     let copiedSize = 0;
     for (let i = 0; i < toCopy.length; i++) {
         const relativePath = toCopy[i];
-        const sourcePath = path.join(job.source, relativePath);
-        const destPath = path.join(job.destination, relativePath);
-        
-        sendUpdate(
-            'Copying',
-            totalCopySize > 0 ? (copiedSize / totalCopySize) * 100 : 0,
-            `Copying file ${i + 1} of ${toCopy.length}: ${relativePath}`
-        );
-
+        sendUpdate('Copying', totalCopySize > 0 ? (copiedSize / totalCopySize) * 100 : 0, `Copying file ${i + 1} of ${toCopy.length}: ${relativePath}`);
         try {
+            const destPath = path.join(job.destination, relativePath);
             await fs.mkdir(path.dirname(destPath), { recursive: true });
-            await fs.copyFile(sourcePath, destPath);
-            const sourceStat = sourceEntries.get(relativePath);
-            if (sourceStat) {
-                copiedSize += sourceStat.size;
-            }
+            await fs.copyFile(path.join(job.source, relativePath), destPath);
+            copiedSize += sourceEntries.get(relativePath).size;
         } catch (error) {
             sendUpdate('Error', 0, `Failed to copy: ${relativePath}. ${error.message}`);
             return;
@@ -187,50 +229,29 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
     }
 
-    const finalMessage = toDelete.length > 0
-        ? `Backup complete. ${toDelete.length} item(s) pending cleanup.`
-        : `Backup completed successfully at ${new Date().toLocaleTimeString()}.`;
-
-    sendUpdate('Done', 100, finalMessage, { filesToDelete: toDelete });
+    const settings = store.get('settings', { autoCleanup: false });
+    if (settings.autoCleanup && toDelete.length > 0) {
+        sendUpdate('Syncing', 100, `Auto-cleaning ${toDelete.length} item(s)...`);
+        const cleanupResult = await performCleanup(job, toDelete);
+        const finalMessage = cleanupResult.success
+            ? `Backup and cleanup completed successfully at ${new Date().toLocaleTimeString()}.`
+            : `Backup complete, but auto-cleanup failed: ${cleanupResult.error}`;
+        sendUpdate('Done', 100, finalMessage);
+    } else {
+        const finalMessage = toDelete.length > 0
+            ? `Backup complete. ${toDelete.length} item(s) pending cleanup.`
+            : `Backup completed successfully at ${new Date().toLocaleTimeString()}.`;
+        sendUpdate('Done', 100, finalMessage, { filesToDelete: toDelete });
+    }
 });
 
 ipcMain.on('job:cleanup', async (event, { jobId, files }) => {
     const jobs = store.get('jobs', []);
     const job = jobs.find(j => j.id === jobId);
-    if (!job || !files || files.length === 0) {
-        mainWindow.webContents.send('job:cleanup-complete', { jobId, success: false, error: "Job or files not found." });
+    if (!job) {
+        mainWindow.webContents.send('job:cleanup-complete', { jobId, success: false, error: "Job not found." });
         return;
     }
-
-    try {
-        const filesToDelete = files.filter(item => item.type === 'file').map(item => item.path);
-        const dirsToDelete = files.filter(item => item.type === 'dir').map(item => item.path);
-
-        // Delete files first
-        for (const relativePath of filesToDelete) {
-            const destPath = path.join(job.destination, relativePath);
-            try {
-                await fs.unlink(destPath);
-            } catch (error) {
-                 console.error(`Failed to delete file ${destPath}:`, error);
-            }
-        }
-
-        // Delete directories, longest path first to ensure they are empty
-        dirsToDelete.sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
-        for (const relativePath of dirsToDelete) {
-            const destPath = path.join(job.destination, relativePath);
-            try {
-                await fs.rmdir(destPath);
-            } catch (error) {
-                 console.error(`Failed to delete directory ${destPath}:`, error);
-            }
-        }
-        
-        mainWindow.webContents.send('job:cleanup-complete', { jobId, success: true });
-
-    } catch (error) {
-        console.error(`Error during cleanup for job ${jobId}:`, error);
-        mainWindow.webContents.send('job:cleanup-complete', { jobId, success: false, error: error.message });
-    }
+    const result = await performCleanup(job, files);
+    mainWindow.webContents.send('job:cleanup-complete', { jobId, ...result });
 });

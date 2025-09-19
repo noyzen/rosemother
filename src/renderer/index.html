@@ -21,6 +21,21 @@
           <i class="fa-solid fa-broom"></i> Batch Cleanup
         </button>
         <div class="action-separator"></div>
+        <button id="export-jobs-btn" class="btn-secondary" aria-label="Export Jobs">
+            <i class="fa-solid fa-file-export"></i> Export
+        </button>
+        <button id="import-jobs-btn" class="btn-secondary" aria-label="Import Jobs">
+            <i class="fa-solid fa-file-import"></i> Import
+        </button>
+        <div class="action-separator"></div>
+        <div class="toggle-switch-container">
+            <label for="auto-cleanup-toggle" class="toggle-label">Auto Cleanup</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="auto-cleanup-toggle">
+              <span class="slider"></span>
+            </label>
+        </div>
+        <div class="action-separator"></div>
         <button id="add-job-btn" class="btn-primary" aria-label="Add New Backup Job">
           <i class="fa-solid fa-plus"></i> New Job
         </button>

@@ -5,6 +5,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getJobs: () => ipcRenderer.invoke('jobs:get'),
   setJobs: (jobs) => ipcRenderer.invoke('jobs:set', jobs),
   openDialog: () => ipcRenderer.invoke('dialog:openDirectory'),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  setSettings: (settings) => ipcRenderer.invoke('settings:set', settings),
+  saveJsonDialog: (content) => ipcRenderer.invoke('dialog:saveJson', content),
+  openJsonDialog: () => ipcRenderer.invoke('dialog:openJson'),
   
   // Renderer to Main (one-way)
   startJob: (id) => ipcRenderer.send('job:start', id),

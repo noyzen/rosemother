@@ -4,6 +4,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const addJobBtn = document.getElementById('add-job-btn');
   const startAllBtn = document.getElementById('start-all-btn');
   const batchCleanupBtn = document.getElementById('batch-cleanup-btn');
+  const exportJobsBtn = document.getElementById('export-jobs-btn');
+  const importJobsBtn = document.getElementById('import-jobs-btn');
+  const autoCleanupToggle = document.getElementById('auto-cleanup-toggle');
 
   // Modals
   const jobModal = document.getElementById('job-modal');
@@ -19,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const confirmFileList = document.getElementById('confirm-file-list');
 
   let jobs = [];
+  let appSettings = { autoCleanup: false };
   let confirmCallback = null;
   let pendingCleanups = {};
   let jobQueue = [];
@@ -30,6 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
     emptyStateEl.classList.toggle('hidden', hasJobs);
     jobsListEl.classList.toggle('hidden', !hasJobs);
     startAllBtn.classList.toggle('hidden', !hasJobs);
+    exportJobsBtn.classList.toggle('hidden', !hasJobs);
 
     if (hasJobs) {
       jobs.forEach(job => {
@@ -78,6 +83,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const loadJobs = async () => {
     jobs = await window.electronAPI.getJobs();
     renderJobs();
+  };
+
+  const loadSettings = async () => {
+    appSettings = await window.electronAPI.getSettings();
+    autoCleanupToggle.checked = appSettings.autoCleanup;
+  };
+
+  const saveSettings = async () => {
+    await window.electronAPI.setSettings(appSettings);
   };
 
   const updateBatchCleanupButton = () => {
@@ -154,10 +168,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const okBtn = document.getElementById('confirm-ok-btn');
         okBtn.className = `btn-${okClass.startsWith('btn-') ? okClass : `btn-${okClass}`}`;
+        
+        document.getElementById('confirm-cancel-btn').classList.toggle('hidden', okClass === 'info');
+        okBtn.textContent = okClass === 'info' ? 'Close' : 'OK';
 
         confirmModal.classList.remove('hidden');
         confirmCallback = (confirmed) => {
             confirmModal.classList.add('hidden');
+            document.getElementById('confirm-cancel-btn').classList.remove('hidden');
+            okBtn.textContent = 'OK';
             resolve(confirmed);
         };
     });
@@ -274,6 +293,64 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  autoCleanupToggle.addEventListener('change', (e) => {
+    appSettings.autoCleanup = e.target.checked;
+    saveSettings();
+  });
+
+  exportJobsBtn.addEventListener('click', async () => {
+    const exportData = {
+        version: '1.0.0',
+        rosemother_export: true,
+        jobs: jobs.map(({ source, destination }) => ({ source, destination })),
+    };
+    const { success, error } = await window.electronAPI.saveJsonDialog(JSON.stringify(exportData, null, 2));
+    if (!success && error !== 'Save dialog canceled.') {
+        await showConfirm('Export Failed', `Could not save the file: ${error}`, 'info');
+    }
+  });
+
+  importJobsBtn.addEventListener('click', async () => {
+    const { success, content, error } = await window.electronAPI.openJsonDialog();
+    if (!success) {
+        if (error !== 'Open dialog canceled.') {
+            await showConfirm('Import Failed', `Could not open the file: ${error}`, 'info');
+        }
+        return;
+    }
+    try {
+        const data = JSON.parse(content);
+        if (!data.rosemother_export || !Array.isArray(data.jobs)) {
+            throw new Error('Invalid or corrupted export file.');
+        }
+
+        let importedCount = 0;
+        data.jobs.forEach(importedJob => {
+            if (importedJob.source && importedJob.destination) {
+                const alreadyExists = jobs.some(j => j.source === importedJob.source && j.destination === importedJob.destination);
+                if (!alreadyExists) {
+                    jobs.push({
+                        id: `job_${Date.now()}_${importedCount}`,
+                        source: importedJob.source,
+                        destination: importedJob.destination
+                    });
+                    importedCount++;
+                }
+            }
+        });
+
+        if (importedCount > 0) {
+            await saveJobs();
+            await showConfirm('Import Successful', `Successfully added ${importedCount} new job(s).`, 'info');
+        } else {
+            await showConfirm('Import Complete', 'No new jobs were imported. The jobs may already exist.', 'info');
+        }
+
+    } catch (e) {
+        await showConfirm('Import Failed', `Could not parse the file: ${e.message}`, 'info');
+    }
+  });
+
   window.electronAPI.onJobUpdate(data => {
     const { jobId, status, progress, message, payload } = data;
     const jobEl = document.querySelector(`.job-item[data-id="${jobId}"]`);
@@ -345,5 +422,6 @@ document.addEventListener('DOMContentLoaded', () => {
      }
   });
 
+  loadSettings();
   loadJobs();
 });
