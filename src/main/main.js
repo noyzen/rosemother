@@ -40,6 +40,12 @@ function logToRenderer(level, message) {
     (console[levelMap[level]] || console.log)(`[${level}] ${message}`);
 }
 
+function sendUpdateForJob(jobId, status, progress = 0, message = '', payload = {}) {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+        mainWindow.webContents.send('job:update', { jobId, status, progress, message, payload });
+    }
+}
+
 function createWindow() {
   const mainWindowState = WindowState({
     defaultWidth: 1000,
@@ -198,7 +204,7 @@ async function countFiles(startPath, jobId) {
 }
 
 // Backup Logic
-async function performCleanup(job, files) {
+async function performCleanup(job, files, progressCallback) {
     if (!job || !files || files.length === 0) {
         return { success: false, error: "Job or files not found." };
     }
@@ -206,14 +212,27 @@ async function performCleanup(job, files) {
     try {
         const filesToDelete = files.filter(item => item.type === 'file').map(item => item.path);
         const dirsToDelete = files.filter(item => item.type === 'dir').map(item => item.path);
+        
+        const totalCount = filesToDelete.length + dirsToDelete.length;
+        let deletedCount = 0;
 
         for (const relativePath of filesToDelete) {
             await fs.rm(path.join(job.destination, relativePath), { force: true }).catch(err => logToRenderer('ERROR', `Failed to delete file ${relativePath}: ${err.message}`));
+            deletedCount++;
+            if (progressCallback) {
+                const progress = totalCount > 0 ? (deletedCount / totalCount) * 100 : 100;
+                progressCallback(progress, `Deleting file ${deletedCount} of ${totalCount}`);
+            }
         }
 
         dirsToDelete.sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
         for (const relativePath of dirsToDelete) {
             await fs.rm(path.join(job.destination, relativePath), { recursive: true, force: true }).catch(err => logToRenderer('ERROR', `Failed to delete directory ${relativePath}: ${err.message}`));
+            deletedCount++;
+            if (progressCallback) {
+                const progress = totalCount > 0 ? (deletedCount / totalCount) * 100 : 100;
+                progressCallback(progress, `Deleting folder ${deletedCount} of ${totalCount}`);
+            }
         }
         logToRenderer('SUCCESS', `Cleanup for job ${job.id} completed.`);
         return { success: true };
@@ -234,12 +253,7 @@ ipcMain.on('job:start', async (event, jobId) => {
     if (!job) return;
 
     const settings = store.get('settings', { loggingEnabled: true, preventSleep: false, autoCleanup: false });
-
-    const sendUpdate = (status, progress = 0, message = '', payload = {}) => {
-        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
-            mainWindow.webContents.send('job:update', { jobId, status, progress, message, payload });
-        }
-    };
+    const sendUpdate = (status, progress, message, payload) => sendUpdateForJob(jobId, status, progress, message, payload);
 
     // Store indexes in the app's user data directory for safety and persistence.
     const indexesPath = path.join(app.getPath('userData'), 'job_indexes');
@@ -319,7 +333,7 @@ ipcMain.on('job:start', async (event, jobId) => {
             destIndex = {}; // Clear old data if rebuilding
             
             // Pre-scan to count files for progress reporting
-            sendUpdate('Scanning', 0, 'Counting destination files...');
+            sendUpdate('Scanning', -1, 'Counting destination files...');
             let totalFileCount = 0;
             try {
                 logToRenderer('INFO', `Job ${jobId}: Starting file count for destination at ${job.destination}.`);
@@ -388,6 +402,24 @@ ipcMain.on('job:start', async (event, jobId) => {
             return acc;
         }, {});
 
+        sendUpdate('Copying', 0, 'Counting source files...');
+        let totalSourceFiles = 0;
+        try {
+            totalSourceFiles = await countFiles(job.source, jobId);
+        } catch (err) {
+            if (err.message === 'COUNT_STOPPED') {
+                logToRenderer('WARN', `Job ${jobId} was stopped during source file count.`);
+                sendUpdate('Stopped', 0, 'Job stopped by user.');
+                return;
+            }
+            logToRenderer('WARN', `Job ${jobId}: Could not count source files. Progress will be indeterminate.`);
+        }
+
+        if (stopFlags.has(jobId)) {
+            sendUpdate('Stopped', 0, 'Job stopped by user.');
+            return;
+        }
+
         const sourcePaths = new Set();
         let processedFiles = 0;
 
@@ -410,10 +442,13 @@ ipcMain.on('job:start', async (event, jobId) => {
                     await syncDirectory(relativePath);
                 } else if (dirent.isFile()) {
                     processedFiles++;
-                    sendUpdate('Copying', -1, `Processing: ${processedFiles.toLocaleString()} files...`);
+                    const progress = totalSourceFiles > 0 ? (processedFiles / totalSourceFiles) * 100 : -1;
+                    
                     try {
                         const sourceStats = await fs.stat(sourcePath);
                         const destEntry = destIndex[relativePath];
+                        
+                        sendUpdate('Copying', progress, `Processing: ${relativePath}`);
 
                         // Optimization: Skip hashing if file metadata is identical.
                         if (destEntry && destEntry.size === sourceStats.size && destEntry.mtimeMs === sourceStats.mtimeMs) {
@@ -432,14 +467,14 @@ ipcMain.on('job:start', async (event, jobId) => {
                         // Check if this content exists elsewhere (a move/rename).
                         const movedPath = hashToPathMap[sourceHash];
                         if (movedPath && movedPath !== relativePath) {
-                            sendUpdate('Copying', -1, `Moving: ${movedPath} -> ${relativePath}`);
+                            sendUpdate('Copying', progress, `Moving: ${movedPath} -> ${relativePath}`);
                             const oldFullPath = path.join(job.destination, movedPath);
                             await fs.rename(oldFullPath, destPath);
                             delete destIndex[movedPath]; // Remove old index entry
                             logToRenderer('INFO', `Job ${jobId}: Detected move for ${relativePath}`);
                         } else {
                             // This is a new or truly modified file, so copy it.
-                            sendUpdate('Copying', -1, `Copying: ${relativePath}`);
+                            sendUpdate('Copying', progress, `Copying: ${relativePath}`);
                             await fs.copyFile(sourcePath, destPath);
                         }
 
@@ -457,7 +492,7 @@ ipcMain.on('job:start', async (event, jobId) => {
             }
         }
 
-        sendUpdate('Copying', -1, 'Starting backup process...');
+        sendUpdate('Copying', 0, 'Starting backup process...');
         await syncDirectory('');
 
         if (stopFlags.has(jobId)) {
@@ -491,8 +526,10 @@ ipcMain.on('job:start', async (event, jobId) => {
         
         let finalMessage;
         if (settings.autoCleanup && toDelete.length > 0 && copyErrors.length === 0) {
-            sendUpdate(finalStatus, 100, `Auto-cleaning ${toDelete.length} item(s)...`, payload);
-            const cleanupResult = await performCleanup(job, toDelete);
+            sendUpdate(finalStatus, 0, `Auto-cleaning ${toDelete.length} item(s)...`, payload);
+            const cleanupResult = await performCleanup(job, toDelete, (progress, message) => {
+                sendUpdate('Cleaning', progress, message);
+            });
             if (cleanupResult.success) {
                 finalMessage = `Backup and cleanup completed successfully at ${new Date().toLocaleTimeString()}.`;
                 logToRenderer('SUCCESS', `Job ${jobId}: ${finalMessage}`);
@@ -547,7 +584,10 @@ ipcMain.on('job:cleanup', async (event, { jobId, files }) => {
         mainWindow.webContents.send('job:cleanup-complete', { jobId, success: false, error: "Job not found." });
         return;
     }
-    const result = await performCleanup(job, files);
+    const progressCallback = (progress, message) => {
+        sendUpdateForJob(jobId, 'Cleaning', progress, message);
+    };
+    const result = await performCleanup(job, files, progressCallback);
     mainWindow.webContents.send('job:cleanup-complete', { jobId, ...result });
 });
 

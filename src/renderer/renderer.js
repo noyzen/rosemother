@@ -703,7 +703,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const cleanupBtn = jobEl.querySelector('.btn-cleanup');
     const viewErrorsBtn = jobEl.querySelector('.btn-view-errors');
     
-    statusText.textContent = message || status;
+    const isCounting = (message || '').startsWith('Counting');
+    if (isCounting && progress < 0) {
+      const textNode = document.createTextNode(` ${message}`);
+      const icon = document.createElement('i');
+      icon.className = 'fa-solid fa-spinner fa-spin status-spinner';
+      statusText.innerHTML = ''; // Clear previous content
+      statusText.appendChild(icon);
+      statusText.appendChild(textNode);
+    } else {
+      statusText.textContent = message || status;
+    }
     
     if (progress < 0) { // Indeterminate state
       progressBar.style.width = '100%';
