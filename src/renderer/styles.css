@@ -229,7 +229,7 @@ input:checked + .slider:before { transform: translateX(20px); }
 }
 .status-details {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--spacing-md);
   flex-shrink: 0;
 }
