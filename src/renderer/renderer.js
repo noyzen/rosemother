@@ -170,7 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const renderJobs = () => {
     const hasJobs = jobs.length > 0;
-    emptyStateEl.classList.toggle('hidden', !hasJobs);
+    emptyStateEl.classList.toggle('hidden', hasJobs);
     jobsListEl.classList.toggle('hidden', !hasJobs);
     startAllBtn.classList.toggle('hidden', !hasJobs);
     
@@ -227,6 +227,7 @@ document.addEventListener('DOMContentLoaded', () => {
                      <div class="job-status-container">
                         <div class="job-status">
                             <span class="status-text">${idleMessage}</span>
+                            <span class="status-count hidden"></span>
                             <span class="status-eta hidden"></span>
                             <span class="status-warning ${hasPersistedErrors ? '' : 'hidden'}">${hasPersistedErrors ? `${jobErrors[job.id].length} file(s) failed` : ''}</span>
                         </div>
@@ -699,6 +700,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!jobEl) return;
 
     const statusText = jobEl.querySelector('.status-text');
+    const statusCount = jobEl.querySelector('.status-count');
     const statusEta = jobEl.querySelector('.status-eta');
     const statusWarning = jobEl.querySelector('.status-warning');
     const progressBar = jobEl.querySelector('.progress-bar');
@@ -729,6 +731,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const isRunning = ['Scanning', 'Copying', 'Syncing', 'Cleaning'].includes(status);
     jobEl.classList.toggle('is-running', isRunning);
 
+    // Reset phase classes
+    jobEl.classList.remove('is-scanning', 'is-copying', 'is-cleaning');
+    if (status === 'Scanning') jobEl.classList.add('is-scanning');
+    if (status === 'Copying') jobEl.classList.add('is-copying');
+    if (status === 'Cleaning') jobEl.classList.add('is-cleaning');
+
     if (isRunning) {
       runningJobs.add(jobId);
       startStopBtn.innerHTML = '<i class="fa-solid fa-stop"></i> Stop';
@@ -748,6 +756,13 @@ document.addEventListener('DOMContentLoaded', () => {
         statusEta.classList.remove('hidden');
     } else {
         statusEta.classList.add('hidden');
+    }
+    
+    if (status === 'Copying' && payload && payload.processedFiles && payload.totalSourceFiles > 0) {
+        statusCount.textContent = `${payload.processedFiles.toLocaleString()} of ${payload.totalSourceFiles.toLocaleString()}`;
+        statusCount.classList.remove('hidden');
+    } else {
+        statusCount.classList.add('hidden');
     }
     
     if (payload && payload.copyErrors && payload.copyErrors.length > 0) {
@@ -791,7 +806,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(processJobQueue, 500);
       }
       setTimeout(() => {
-        jobEl.classList.remove('is-error', 'is-done');
+        jobEl.classList.remove('is-error', 'is-done', 'is-scanning', 'is-copying', 'is-cleaning');
         const hasPersistedErrors = jobErrors[jobId] && jobErrors[jobId].length > 0;
         const hasPendingCleanup = pendingCleanups[jobId] && pendingCleanups[jobId].length > 0;
         

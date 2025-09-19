@@ -402,7 +402,7 @@ ipcMain.on('job:start', async (event, jobId) => {
             return acc;
         }, {});
 
-        sendUpdate('Copying', 0, 'Counting source files...');
+        sendUpdate('Scanning', -1, 'Counting source files...');
         let totalSourceFiles = 0;
         try {
             totalSourceFiles = await countFiles(job.source, jobId);
@@ -443,12 +443,13 @@ ipcMain.on('job:start', async (event, jobId) => {
                 } else if (dirent.isFile()) {
                     processedFiles++;
                     const progress = totalSourceFiles > 0 ? (processedFiles / totalSourceFiles) * 100 : -1;
+                    const copyPayload = { processedFiles, totalSourceFiles };
                     
                     try {
                         const sourceStats = await fs.stat(sourcePath);
                         const destEntry = destIndex[relativePath];
                         
-                        sendUpdate('Copying', progress, `Processing: ${relativePath}`);
+                        sendUpdate('Copying', progress, `Processing: ${relativePath}`, copyPayload);
 
                         // Optimization: Skip hashing if file metadata is identical.
                         if (destEntry && destEntry.size === sourceStats.size && destEntry.mtimeMs === sourceStats.mtimeMs) {
@@ -467,14 +468,14 @@ ipcMain.on('job:start', async (event, jobId) => {
                         // Check if this content exists elsewhere (a move/rename).
                         const movedPath = hashToPathMap[sourceHash];
                         if (movedPath && movedPath !== relativePath) {
-                            sendUpdate('Copying', progress, `Moving: ${movedPath} -> ${relativePath}`);
+                            sendUpdate('Copying', progress, `Moving: ${movedPath} -> ${relativePath}`, copyPayload);
                             const oldFullPath = path.join(job.destination, movedPath);
                             await fs.rename(oldFullPath, destPath);
                             delete destIndex[movedPath]; // Remove old index entry
                             logToRenderer('INFO', `Job ${jobId}: Detected move for ${relativePath}`);
                         } else {
                             // This is a new or truly modified file, so copy it.
-                            sendUpdate('Copying', progress, `Copying: ${relativePath}`);
+                            sendUpdate('Copying', progress, `Copying: ${relativePath}`, copyPayload);
                             await fs.copyFile(sourcePath, destPath);
                         }
 
