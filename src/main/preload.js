@@ -8,9 +8,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Renderer to Main (one-way)
   startJob: (id) => ipcRenderer.send('job:start', id),
-  sendDeleteConfirmation: (jobId, confirmed) => ipcRenderer.send(`job:confirm-delete-response-${jobId}`, confirmed),
+  cleanupJob: (data) => ipcRenderer.send('job:cleanup', data),
   
   // Main to Renderer
   onJobUpdate: (callback) => ipcRenderer.on('job:update', (_event, value) => callback(value)),
-  onDeleteRequest: (callback) => ipcRenderer.on('job:request-delete-confirmation', (_event, value) => callback(value)),
+  onCleanupComplete: (callback) => ipcRenderer.on('job:cleanup-complete', (_event, value) => callback(value)),
 });

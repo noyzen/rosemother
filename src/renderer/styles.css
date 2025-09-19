@@ -12,6 +12,7 @@
   --accent-green: #28a745;
   --accent-red: #dc3545;
   --accent-red-hover: #c82333;
+  --accent-yellow: #ffc107;
   --border-color: #2f2f2f;
   --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Ubuntu, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
 }
@@ -63,6 +64,20 @@ body {
 }
 .hidden { display: none !important; }
 
+/* Header Actions */
+#header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.action-separator {
+  width: 1px;
+  height: 24px;
+  background-color: var(--border-color);
+  margin: 0 4px;
+}
+
+
 /* --- Buttons --- */
 .btn-primary, .btn-secondary, .btn-danger {
   border: none;
@@ -71,8 +86,11 @@ body {
   font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.2s ease;
+  transition: background-color 0.2s ease, opacity 0.2s ease;
   font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .btn-primary { background: var(--accent-blue); color: white; }
 .btn-primary:hover { background: var(--accent-blue-hover); }
@@ -80,7 +98,11 @@ body {
 .btn-secondary:hover { background: #4a4a4a; }
 .btn-danger { background: var(--accent-red); color: white; }
 .btn-danger:hover { background: var(--accent-red-hover); }
-.btn-primary i { margin-right: 6px; }
+.btn-primary i, .btn-secondary i, .btn-danger i { margin-right: 8px; }
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 
 /* --- Job List --- */
 #jobs-list {
@@ -164,10 +186,12 @@ body {
   align-items: center;
   justify-content: center;
 }
-.btn-icon:hover { background: #4a4a4a; color: white; }
+.btn-icon:not(:disabled):hover { background: #4a4a4a; color: white; }
 .btn-icon:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-icon.btn-delete:hover { background: var(--accent-red); }
-.btn-icon.btn-start:hover { background: var(--accent-green); }
+.btn-icon.btn-delete:not(:disabled):hover { background: var(--accent-red); }
+.btn-icon.btn-start:not(:disabled):hover { background: var(--accent-green); }
+.btn-icon.btn-cleanup { color: var(--accent-yellow); }
+.btn-icon.btn-cleanup:not(:disabled):hover { background: var(--accent-yellow); color: var(--bg-darkest); }
 
 /* --- Empty State --- */
 #empty-state {
@@ -234,7 +258,7 @@ body {
   margin-bottom: 20px;
 }
 #confirm-file-list {
-    max-height: 200px;
+    max-height: 30vh;
     overflow-y: auto;
     background: var(--bg-darkest);
     border: 1px solid var(--border-color);
@@ -242,6 +266,7 @@ body {
     padding: 10px;
     margin-bottom: 20px;
     font-size: 0.8rem;
+    color: var(--fg-light);
 }
 #confirm-file-list ul {
     list-style: none;
@@ -249,8 +274,27 @@ body {
     margin: 0;
 }
 #confirm-file-list li {
-    padding: 2px 0;
+    padding: 2px 5px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    border-radius: 3px;
+}
+.confirm-job-header {
+    font-size: 0.9rem;
+    color: var(--fg-lightest);
+    background: var(--bg-medium);
+    padding: 6px 10px;
+    margin-top: 10px;
+    border-radius: 4px;
+}
+.confirm-job-header:first-child {
+    margin-top: 0;
+}
+.confirm-job-sublist {
+    padding-left: 20px;
+    margin: 5px 0 10px 0;
+}
+.confirm-job-sublist li {
+    color: var(--fg-medium);
 }

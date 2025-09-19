@@ -2,6 +2,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const jobsListEl = document.getElementById('jobs-list');
   const emptyStateEl = document.getElementById('empty-state');
   const addJobBtn = document.getElementById('add-job-btn');
+  const startAllBtn = document.getElementById('start-all-btn');
+  const batchCleanupBtn = document.getElementById('batch-cleanup-btn');
 
   // Modals
   const jobModal = document.getElementById('job-modal');
@@ -18,16 +20,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let jobs = [];
   let confirmCallback = null;
+  let pendingCleanups = {};
+  let jobQueue = [];
+  let isBatchRunning = false;
 
   const renderJobs = () => {
     jobsListEl.innerHTML = '';
-    if (jobs.length === 0) {
-      emptyStateEl.classList.remove('hidden');
-      jobsListEl.classList.add('hidden');
-    } else {
-      emptyStateEl.classList.add('hidden');
-      jobsListEl.classList.remove('hidden');
+    const hasJobs = jobs.length > 0;
+    emptyStateEl.classList.toggle('hidden', hasJobs);
+    jobsListEl.classList.toggle('hidden', !hasJobs);
+    startAllBtn.classList.toggle('hidden', !hasJobs);
+
+    if (hasJobs) {
       jobs.forEach(job => {
+        const hasPendingCleanup = pendingCleanups[job.id] && pendingCleanups[job.id].length > 0;
         const jobEl = document.createElement('div');
         jobEl.className = 'job-item';
         jobEl.dataset.id = job.id;
@@ -45,12 +51,13 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
           <div class="job-details">
             <div class="job-status">
-              <span class="status-text">Idle</span>
+              <span class="status-text">${hasPendingCleanup ? `${pendingCleanups[job.id].length} item(s) pending cleanup.` : 'Idle'}</span>
               <div class="progress-bar-container">
                 <div class="progress-bar"></div>
               </div>
             </div>
             <div class="job-actions">
+              <button class="btn-icon btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" aria-label="Cleanup Files"><i class="fa-solid fa-broom"></i></button>
               <button class="btn-icon btn-start" aria-label="Start Backup"><i class="fa-solid fa-play"></i></button>
               <button class="btn-icon btn-edit" aria-label="Edit Job"><i class="fa-solid fa-pencil"></i></button>
               <button class="btn-icon btn-delete" aria-label="Delete Job"><i class="fa-solid fa-trash-can"></i></button>
@@ -60,6 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
         jobsListEl.appendChild(jobEl);
       });
     }
+    updateBatchCleanupButton();
   };
 
   const saveJobs = async () => {
@@ -70,6 +78,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const loadJobs = async () => {
     jobs = await window.electronAPI.getJobs();
     renderJobs();
+  };
+
+  const updateBatchCleanupButton = () => {
+    const hasPending = Object.values(pendingCleanups).some(files => files.length > 0);
+    batchCleanupBtn.classList.toggle('hidden', !hasPending);
   };
 
   const openJobModal = (job = null) => {
@@ -88,24 +101,51 @@ document.addEventListener('DOMContentLoaded', () => {
   
   const closeJobModal = () => jobModal.classList.add('hidden');
 
-  const showConfirm = (title, message, okClass = 'btn-danger', files = []) => {
+  const showConfirm = (title, message, okClass = 'btn-danger', cleanupData = null) => {
     return new Promise(resolve => {
         confirmTitle.textContent = title;
         confirmMessage.textContent = message;
         confirmFileList.innerHTML = '';
 
-        if(files.length > 0) {
+        if(cleanupData) {
             confirmFileList.classList.remove('hidden');
             const list = document.createElement('ul');
-            files.slice(0, 100).forEach(file => { // show max 100 files
-                const item = document.createElement('li');
-                item.textContent = file;
-                list.appendChild(item);
-            });
-            if (files.length > 100) {
-                 const item = document.createElement('li');
-                 item.textContent = `...and ${files.length - 100} more files.`;
-                 list.appendChild(item);
+            
+            if (Array.isArray(cleanupData)) { // Single job
+                 cleanupData.slice(0, 100).forEach(file => {
+                    const item = document.createElement('li');
+                    item.textContent = file.path;
+                    list.appendChild(item);
+                });
+                if (cleanupData.length > 100) {
+                    const item = document.createElement('li');
+                    item.textContent = `...and ${cleanupData.length - 100} more items.`;
+                    list.appendChild(item);
+                }
+            } else { // Batch object
+                 Object.entries(cleanupData).forEach(([jobId, files]) => {
+                    if (files.length === 0) return;
+                    const job = jobs.find(j => j.id === jobId);
+                    const jobName = job ? `${job.source.split(/[\\/]/).pop()} → ${job.destination.split(/[\\/]/).pop()}` : 'Unknown Job';
+                    const header = document.createElement('li');
+                    header.className = 'confirm-job-header';
+                    header.innerHTML = `<strong>${jobName}</strong> (${files.length} items)`;
+                    list.appendChild(header);
+
+                    const sublist = document.createElement('ul');
+                    sublist.className = 'confirm-job-sublist';
+                    files.slice(0, 20).forEach(file => {
+                        const item = document.createElement('li');
+                        item.textContent = file.path;
+                        sublist.appendChild(item);
+                    });
+                    if (files.length > 20) {
+                        const item = document.createElement('li');
+                        item.textContent = `...and ${files.length - 20} more.`;
+                        sublist.appendChild(item);
+                    }
+                    list.appendChild(sublist);
+                });
             }
             confirmFileList.appendChild(list);
         } else {
@@ -113,7 +153,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const okBtn = document.getElementById('confirm-ok-btn');
-        okBtn.className = `btn-${okClass}`;
+        okBtn.className = `btn-${okClass.startsWith('btn-') ? okClass : `btn-${okClass}`}`;
 
         confirmModal.classList.remove('hidden');
         confirmCallback = (confirmed) => {
@@ -178,46 +218,131 @@ document.addEventListener('DOMContentLoaded', () => {
         const confirmed = await showConfirm('Delete Job', 'Are you sure you want to permanently delete this job configuration?', 'danger');
         if (confirmed) {
             jobs = jobs.filter(j => j.id !== jobId);
+            delete pendingCleanups[jobId];
             saveJobs();
+        }
+    } else if (button.classList.contains('btn-cleanup')) {
+        const filesToClean = pendingCleanups[jobId] || [];
+        const confirmed = await showConfirm(
+            'Confirm Cleanup',
+            `Permanently delete ${filesToClean.length} item(s) from the destination? This cannot be undone.`,
+            'danger',
+            filesToClean
+        );
+        if (confirmed) {
+            window.electronAPI.cleanupJob({ jobId, files: filesToClean });
+            jobItem.querySelector('.status-text').textContent = 'Cleaning up...';
+            button.disabled = true;
         }
     }
   });
 
+  const processJobQueue = () => {
+    if (jobQueue.length === 0) {
+        isBatchRunning = false;
+        startAllBtn.disabled = false;
+        startAllBtn.innerHTML = '<i class="fa-solid fa-play-circle"></i> Start All';
+        return;
+    }
+    const jobId = jobQueue.shift();
+    window.electronAPI.startJob(jobId);
+  };
+
+  startAllBtn.addEventListener('click', () => {
+    if (isBatchRunning) return;
+    isBatchRunning = true;
+    startAllBtn.disabled = true;
+    startAllBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Running All';
+    jobQueue = jobs.map(j => j.id);
+    processJobQueue();
+  });
+  
+  batchCleanupBtn.addEventListener('click', async () => {
+    const totalFiles = Object.values(pendingCleanups).reduce((sum, files) => sum + files.length, 0);
+    const confirmed = await showConfirm(
+        'Confirm Batch Cleanup',
+        `Permanently delete a total of ${totalFiles} item(s) across all jobs? This cannot be undone.`,
+        'danger',
+        pendingCleanups
+    );
+    if (confirmed) {
+        Object.entries(pendingCleanups).forEach(([jobId, files]) => {
+            if (files.length > 0) {
+                window.electronAPI.cleanupJob({ jobId, files });
+            }
+        });
+    }
+  });
+
   window.electronAPI.onJobUpdate(data => {
-    const { jobId, status, progress, message } = data;
+    const { jobId, status, progress, message, payload } = data;
     const jobEl = document.querySelector(`.job-item[data-id="${jobId}"]`);
     if (jobEl) {
         const statusText = jobEl.querySelector('.status-text');
         const progressBar = jobEl.querySelector('.progress-bar');
         const startBtn = jobEl.querySelector('.btn-start');
-
+        const cleanupBtn = jobEl.querySelector('.btn-cleanup');
+        
         statusText.textContent = message || status;
         progressBar.style.width = `${progress}%`;
         
         const isRunning = ['Scanning', 'Copying', 'Syncing'].includes(status);
-        startBtn.disabled = isRunning;
+        [startBtn, ...jobEl.querySelectorAll('.btn-edit, .btn-delete, .btn-cleanup')].forEach(b => b.disabled = isRunning);
         jobEl.classList.toggle('is-running', isRunning);
         jobEl.classList.toggle('is-error', status === 'Error');
         jobEl.classList.toggle('is-done', status === 'Done');
 
-        if(status === 'Error' || status === 'Done') {
+        if (status === 'Done') {
+             if (payload && payload.filesToDelete && payload.filesToDelete.length > 0) {
+                pendingCleanups[jobId] = payload.filesToDelete;
+                cleanupBtn.classList.remove('hidden');
+             } else {
+                delete pendingCleanups[jobId];
+                cleanupBtn.classList.add('hidden');
+             }
+             updateBatchCleanupButton();
+        }
+
+        if (status === 'Error' || status === 'Done') {
+            if (isBatchRunning) {
+                setTimeout(processJobQueue, 500);
+            }
             setTimeout(() => {
                 jobEl.classList.remove('is-error', 'is-done');
-                statusText.textContent = 'Idle';
-                progressBar.style.width = '0%';
+                if (!Object.keys(pendingCleanups).includes(jobId)) {
+                    statusText.textContent = 'Idle';
+                    progressBar.style.width = '0%';
+                }
             }, 8000);
         }
     }
   });
+  
+  window.electronAPI.onCleanupComplete(({ jobId, success }) => {
+     const jobEl = document.querySelector(`.job-item[data-id="${jobId}"]`);
+     if (jobEl) {
+        delete pendingCleanups[jobId];
+        updateBatchCleanupButton();
+        
+        const statusText = jobEl.querySelector('.status-text');
+        const cleanupBtn = jobEl.querySelector('.btn-cleanup');
+        
+        cleanupBtn.classList.add('hidden');
+        cleanupBtn.disabled = false;
+        
+        if(success) {
+            statusText.textContent = 'Cleanup complete.';
+            jobEl.classList.add('is-done');
+        } else {
+            statusText.textContent = 'Cleanup failed.';
+            jobEl.classList.add('is-error');
+        }
 
-  window.electronAPI.onDeleteRequest(async ({ jobId, files }) => {
-    const confirmed = await showConfirm(
-        'Confirm Sync Deletion',
-        `The following ${files.length} files exist in the destination but not the source. Do you want to permanently delete them? This action cannot be undone.`,
-        'danger',
-        files
-    );
-    window.electronAPI.sendDeleteConfirmation(jobId, confirmed);
+        setTimeout(() => {
+             jobEl.classList.remove('is-error', 'is-done');
+             statusText.textContent = 'Idle';
+        }, 5000);
+     }
   });
 
   loadJobs();

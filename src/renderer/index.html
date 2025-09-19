@@ -13,9 +13,18 @@
   <div id="app-container">
     <header id="app-header">
       <h1><i class="fa-solid fa-shield-heart"></i> Rosemother</h1>
-      <button id="add-job-btn" class="btn-primary" aria-label="Add New Backup Job">
-        <i class="fa-solid fa-plus"></i> New Job
-      </button>
+      <div id="header-actions">
+        <button id="start-all-btn" class="btn-secondary" aria-label="Start All Jobs">
+          <i class="fa-solid fa-play-circle"></i> Start All
+        </button>
+        <button id="batch-cleanup-btn" class="btn-danger hidden" aria-label="Cleanup All Pending Jobs">
+          <i class="fa-solid fa-broom"></i> Batch Cleanup
+        </button>
+        <div class="action-separator"></div>
+        <button id="add-job-btn" class="btn-primary" aria-label="Add New Backup Job">
+          <i class="fa-solid fa-plus"></i> New Job
+        </button>
+      </div>
     </header>
 
     <main id="main-content">

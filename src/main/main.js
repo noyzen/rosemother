@@ -103,8 +103,8 @@ ipcMain.on('job:start', async (event, jobId) => {
     const job = jobs.find(j => j.id === jobId);
     if (!job) return;
 
-    const sendUpdate = (status, progress = 0, message = '') => {
-        mainWindow.webContents.send('job:update', { jobId, status, progress, message });
+    const sendUpdate = (status, progress = 0, message = '', payload = {}) => {
+        mainWindow.webContents.send('job:update', { jobId, status, progress, message, payload });
     };
 
     try {
@@ -187,40 +187,50 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
     }
 
-    if (toDelete.length > 0) {
-        mainWindow.webContents.send('job:request-delete-confirmation', { jobId, files: toDelete.map(item => item.path) });
-        const userChoice = await new Promise(resolve => {
-            ipcMain.once(`job:confirm-delete-response-${jobId}`, (_event, confirmed) => {
-                resolve({ confirmed });
-            });
-        });
-        
-        if (userChoice && userChoice.confirmed) {
-            const filesToDelete = toDelete.filter(item => item.type === 'file').map(item => item.path);
-            const dirsToDelete = toDelete.filter(item => item.type === 'dir').map(item => item.path);
-            
-            // Delete files first
-            for (const relativePath of filesToDelete) {
-                const destPath = path.join(job.destination, relativePath);
-                try {
-                    await fs.unlink(destPath);
-                } catch (error) {
-                     console.error(`Failed to delete ${destPath}:`, error);
-                }
-            }
+    const finalMessage = toDelete.length > 0
+        ? `Backup complete. ${toDelete.length} item(s) pending cleanup.`
+        : `Backup completed successfully at ${new Date().toLocaleTimeString()}.`;
 
-            // Delete directories, longest path first to ensure they are empty
-            dirsToDelete.sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
-            for (const relativePath of dirsToDelete) {
-                const destPath = path.join(job.destination, relativePath);
-                try {
-                    await fs.rmdir(destPath);
-                } catch (error) {
-                     console.error(`Failed to delete directory ${destPath}:`, error);
-                }
-            }
-        }
+    sendUpdate('Done', 100, finalMessage, { filesToDelete: toDelete });
+});
+
+ipcMain.on('job:cleanup', async (event, { jobId, files }) => {
+    const jobs = store.get('jobs', []);
+    const job = jobs.find(j => j.id === jobId);
+    if (!job || !files || files.length === 0) {
+        mainWindow.webContents.send('job:cleanup-complete', { jobId, success: false, error: "Job or files not found." });
+        return;
     }
 
-    sendUpdate('Done', 100, `Backup completed successfully at ${new Date().toLocaleTimeString()}.`);
+    try {
+        const filesToDelete = files.filter(item => item.type === 'file').map(item => item.path);
+        const dirsToDelete = files.filter(item => item.type === 'dir').map(item => item.path);
+
+        // Delete files first
+        for (const relativePath of filesToDelete) {
+            const destPath = path.join(job.destination, relativePath);
+            try {
+                await fs.unlink(destPath);
+            } catch (error) {
+                 console.error(`Failed to delete file ${destPath}:`, error);
+            }
+        }
+
+        // Delete directories, longest path first to ensure they are empty
+        dirsToDelete.sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
+        for (const relativePath of dirsToDelete) {
+            const destPath = path.join(job.destination, relativePath);
+            try {
+                await fs.rmdir(destPath);
+            } catch (error) {
+                 console.error(`Failed to delete directory ${destPath}:`, error);
+            }
+        }
+        
+        mainWindow.webContents.send('job:cleanup-complete', { jobId, success: true });
+
+    } catch (error) {
+        console.error(`Error during cleanup for job ${jobId}:`, error);
+        mainWindow.webContents.send('job:cleanup-complete', { jobId, success: false, error: error.message });
+    }
 });
