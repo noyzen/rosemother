@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const jobNameInput = document.getElementById('job-name');
   const sourcePathInput = document.getElementById('source-path');
   const destPathInput = document.getElementById('dest-path');
+  const jobVerifyContentToggle = document.getElementById('job-verify-content');
   const jobExclusionsEnabledToggle = document.getElementById('job-exclusions-enabled');
   const exclusionsContainer = document.getElementById('exclusions-container');
   const excludedPathsList = document.getElementById('excluded-paths-list');
@@ -235,6 +236,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
 
                 <div class="job-footer">
+                     <div class="job-details-indicator">
+                        ${job.verifyContent ? '<i class="fa-solid fa-check-double" title="Content verification enabled"></i>' : ''}
+                     </div>
                      <div class="job-status-container">
                         <div class="job-status">
                             <span class="status-text">${statusText}</span>
@@ -292,6 +296,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const openJobModal = (job = null) => {
     jobForm.reset();
     jobExclusionsEnabledToggle.checked = false;
+    jobVerifyContentToggle.checked = false;
     exclusionsContainer.classList.add('hidden');
     excludedPathsList.innerHTML = '';
     excludedExtensionsPathList.innerHTML = '';
@@ -302,6 +307,7 @@ document.addEventListener('DOMContentLoaded', () => {
       jobNameInput.value = job.name || '';
       sourcePathInput.value = job.source;
       destPathInput.value = job.destination;
+      jobVerifyContentToggle.checked = job.verifyContent || false;
       
       if (job.exclusions && job.exclusions.enabled) {
         jobExclusionsEnabledToggle.checked = true;
@@ -416,6 +422,7 @@ document.addEventListener('DOMContentLoaded', () => {
       name: jobNameInput.value.trim(),
       source: sourcePathInput.value,
       destination: destPathInput.value,
+      verifyContent: jobVerifyContentToggle.checked,
       exclusions: {
         enabled: jobExclusionsEnabledToggle.checked,
         paths: getRulesFromList(excludedPathsList),
@@ -734,7 +741,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const exportData = {
         version: '1.0.0',
         rosemother_export: true,
-        jobs: jobs.map(({ name, source, destination, exclusions }) => ({ name, source, destination, exclusions })),
+        jobs: jobs.map(({ name, source, destination, exclusions, verifyContent }) => ({ name, source, destination, exclusions, verifyContent })),
     };
     const { success, error } = await window.electronAPI.saveJsonDialog(JSON.stringify(exportData, null, 2));
     if (!success && error !== 'Save dialog canceled.') {
@@ -766,6 +773,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         name: importedJob.name || `Imported Job ${importedCount + 1}`,
                         source: importedJob.source,
                         destination: importedJob.destination,
+                        verifyContent: importedJob.verifyContent || false,
                         exclusions: importedJob.exclusions || { enabled: false, paths: [], extensions: [] }
                     });
                     importedCount++;

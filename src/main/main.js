@@ -1,9 +1,12 @@
 
 
+
 const { app, BrowserWindow, Menu, ipcMain, dialog, powerSaveBlocker } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs/promises');
+const fsSync = require('fs');
+const crypto = require('crypto');
 const WindowState = require('electron-window-state');
 const Store = require('electron-store');
 
@@ -279,6 +282,31 @@ function calculateOrphans(sourcePaths, destIndex, completedDirs) {
     return toDelete;
 }
 
+function calculateFileHash(filePath) {
+    return new Promise((resolve, reject) => {
+        const hash = crypto.createHash('sha256');
+        const stream = fsSync.createReadStream(filePath);
+        stream.on('data', data => hash.update(data));
+        stream.on('end', () => resolve(hash.digest('hex')));
+        stream.on('error', err => reject(err));
+    });
+}
+
+async function loadIndex(filePath) {
+    try {
+        const content = await fs.readFile(filePath, 'utf-8');
+        const data = JSON.parse(content);
+        // Basic validation
+        if (data && typeof data.files === 'object') {
+            return data.files;
+        }
+    } catch (error) {
+        // It's fine if the file doesn't exist or is invalid, we'll just build a new one.
+        console.warn(`[WARN] Could not load previous index from ${filePath}. A new one will be created. Reason: ${error.message}`);
+    }
+    return {};
+}
+
 ipcMain.on('job:start', async (event, jobId) => {
     if (runningJobsInMain.has(jobId)) {
         console.warn(`[WARN] Job ${jobId} is already running. Start request ignored.`);
@@ -353,16 +381,18 @@ ipcMain.on('job:start', async (event, jobId) => {
 
         const copyErrors = [];
 
-        // --- Start of Change: Always rebuild destination index for reliability ---
-        // This fixes a critical bug where files deleted from the destination were not
-        // re-copied because the app was trusting a stale, cached index.
+        // --- Reliable Index Rebuilding ---
+        // 1. Load the old index ONLY to get cached hashes.
+        const oldIndexWithHashes = await loadIndex(indexFilePath);
+
+        // 2. Always rebuild the index from what's currently on disk for reliability.
         destIndex = {};
         sendUpdate('Scanning', -1, 'Scanning destination for changes...');
         let totalFileCount = 0;
         try {
             console.log(`[INFO] Job ${jobId}: Starting to count destination files at ${job.destination}.`);
             totalFileCount = await countFiles(job.destination, jobId);
-            if (stopFlags.has(jobId)) { throw new Error('COUNT_STOPPED'); } // Re-check after long operation
+            if (stopFlags.has(jobId)) { throw new Error('COUNT_STOPPED'); }
             console.log(`[INFO] Job ${jobId}: Finished counting. Found approx ${totalFileCount.toLocaleString()} files in destination.`);
         } catch (err) {
             if (err.message === 'COUNT_STOPPED') {
@@ -400,6 +430,14 @@ ipcMain.on('job:start', async (event, jobId) => {
                     try {
                         const stats = await fs.stat(fullPath);
                         destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs };
+
+                        // 3. Carry over the hash from the old index if file metadata matches.
+                        // This avoids re-hashing the entire destination every time.
+                        const oldEntry = oldIndexWithHashes[relativePath];
+                        if (oldEntry && oldEntry.size === stats.size && oldEntry.mtimeMs === stats.mtimeMs && oldEntry.hash) {
+                            destIndex[relativePath].hash = oldEntry.hash;
+                        }
+
                         scheduleSave();
                     } catch (err) { console.warn(`[WARN] Job ${jobId}: Could not scan ${relativePath}: ${err.message}`); }
                 }
@@ -407,8 +445,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
         await buildIndex('');
         if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
-        // --- End of Change ---
-
+        
         sendUpdate('Scanning', -1, 'Counting source files...');
         let totalSourceFiles = 0;
         try {
@@ -470,11 +507,22 @@ ipcMain.on('job:start', async (event, jobId) => {
                         let needsCopy = false;
                         if (!destEntry) {
                             needsCopy = true;
+                        } else if (sourceStats.size !== destEntry.size) {
+                            needsCopy = true;
+                        } else if (job.verifyContent) {
+                            // Content verification enabled: size matches, now check hash
+                            sendUpdate('Copying', progress, `Verifying: ${relativePath}`, copyPayload);
+                            const sourceHash = await calculateFileHash(sourcePath);
+                            const destHash = destEntry.hash || await calculateFileHash(destPath);
+                            if (sourceHash !== destHash) {
+                                needsCopy = true;
+                            } else if (!destEntry.hash) {
+                                destEntry.hash = destHash; // Cache the calculated hash
+                            }
                         } else {
-                            const sizeChanged = destEntry.size !== sourceStats.size;
-                            // Allow 2-second tolerance for modification time differences across filesystems (e.g. FAT)
+                            // Standard check: size matches, check modification time
                             const mtimeChanged = Math.abs(destEntry.mtimeMs - sourceStats.mtimeMs) > 2000;
-                            if (sizeChanged || mtimeChanged) {
+                            if (mtimeChanged) {
                                 needsCopy = true;
                             }
                         }
@@ -488,6 +536,10 @@ ipcMain.on('job:start', async (event, jobId) => {
                             await fs.utimes(destPath, new Date(sourceStats.mtimeMs), new Date(sourceStats.mtimeMs));
                             
                             destIndex[relativePath] = { size: sourceStats.size, mtimeMs: sourceStats.mtimeMs };
+                            if (job.verifyContent) {
+                                // If we copied, we know the hash matches the source hash.
+                                destIndex[relativePath].hash = await calculateFileHash(sourcePath);
+                            }
                             scheduleSave();
                         }
                     } catch (error) {
