@@ -280,6 +280,19 @@ ipcMain.on('job:stop', (event, jobId) => {
     stopFlags.set(jobId, true);
 });
 
+function calculateOrphans(sourcePaths, destIndex, completedDirs) {
+    const toDelete = [];
+    for (const destPath in destIndex) {
+        const parentDir = path.dirname(destPath);
+        const effectiveParentDir = parentDir === '.' ? '' : parentDir;
+
+        if (completedDirs.has(effectiveParentDir) && !sourcePaths.has(destPath)) {
+            toDelete.push({ path: destPath, type: 'file' });
+        }
+    }
+    return toDelete;
+}
+
 ipcMain.on('job:start', async (event, jobId) => {
     if (runningJobsInMain.has(jobId)) {
         logToRenderer('WARN', `Job ${jobId} is already running. Start request ignored.`);
@@ -325,6 +338,9 @@ ipcMain.on('job:start', async (event, jobId) => {
 
     runningJobsInMain.add(jobId);
     stopFlags.delete(jobId);
+    
+    const sourcePaths = new Set();
+    const completedDirs = new Set();
 
     try {
         if (runningJobsInMain.size === 1) { // Only when the first job starts
@@ -435,7 +451,6 @@ ipcMain.on('job:start', async (event, jobId) => {
 
         if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
 
-        const sourcePaths = new Set();
         let processedFiles = 0;
 
         async function syncDirectory(relativeDir) {
@@ -508,6 +523,7 @@ ipcMain.on('job:start', async (event, jobId) => {
                     }
                 }
             }
+            completedDirs.add(relativeDir);
         }
 
         sendUpdate('Copying', 0, `Starting backup of ${totalSourceFiles.toLocaleString()} file(s)...`);
@@ -515,7 +531,11 @@ ipcMain.on('job:start', async (event, jobId) => {
 
         if (stopFlags.has(jobId)) {
             logToRenderer('WARN', `Job ${jobId} was stopped by the user.`);
-            sendUpdate('Stopped', 0, 'Job stopped by user.');
+            const toDelete = calculateOrphans(sourcePaths, destIndex, completedDirs);
+            if (toDelete.length > 0) {
+                logToRenderer('INFO', `Job ${jobId}: Found ${toDelete.length} orphan items in destination based on partial scan.`);
+            }
+            sendUpdate('Stopped', 0, 'Job stopped by user.', { filesToDelete: toDelete });
             return;
         }
 
@@ -526,13 +546,10 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
 
         sendUpdate('Cleaning', -1, 'Checking for files to delete...');
-        const toDelete = [];
-        for (const destPath in destIndex) {
-            if (!sourcePaths.has(destPath)) {
-                toDelete.push({ path: destPath, type: 'file' });
-                delete destIndex[destPath];
-            }
-        }
+        const toDelete = calculateOrphans(sourcePaths, destIndex, completedDirs);
+        toDelete.forEach(item => {
+            delete destIndex[item.path];
+        });
         logToRenderer('INFO', `Job ${jobId}: Found ${toDelete.length} orphan items in destination.`);
         
         let finalStatus = copyErrors.length > 0 ? 'DoneWithErrors' : 'Done';
@@ -572,7 +589,11 @@ ipcMain.on('job:start', async (event, jobId) => {
 
     } catch(err) {
         logToRenderer('ERROR', `A critical error occurred in job ${jobId}: ${err.message}\n${err.stack}`);
-        sendUpdate('Error', 0, `A critical error occurred: ${err.message}`);
+        const toDelete = calculateOrphans(sourcePaths, destIndex, completedDirs);
+        if (toDelete.length > 0) {
+            logToRenderer('INFO', `Job ${jobId}: Found ${toDelete.length} orphan items that can be cleaned up despite the error.`);
+        }
+        sendUpdate('Error', 0, `A critical error occurred: ${err.message}`, { filesToDelete: toDelete });
     } finally {
         if (saveTimeout) clearTimeout(saveTimeout);
         if (Object.keys(destIndex).length > 0 && !stopFlags.has(jobId)) {

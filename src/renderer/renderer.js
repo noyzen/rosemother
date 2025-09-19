@@ -728,8 +728,10 @@ document.addEventListener('DOMContentLoaded', () => {
             button.setAttribute('title', 'Stopping...');
             window.electronAPI.stopJob(jobId);
         } else {
-            // Clear errors from previous run for this job
+            // Clear errors and pending cleanups from previous run for this job
             delete jobErrors[jobId];
+            delete pendingCleanups[jobId];
+            jobItem.querySelector('.btn-cleanup').classList.add('hidden');
             jobItem.classList.remove('is-warning');
             jobItem.querySelector('.btn-view-errors').classList.add('hidden');
             jobItem.querySelector('.status-warning').classList.add('hidden');
@@ -954,6 +956,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressBar = jobEl.querySelector('.progress-bar');
     const startStopBtn = jobEl.querySelector('.btn-start-stop');
     const cleanupBtn = jobEl.querySelector('.btn-cleanup');
+    const isFinalState = ['Error', 'Done', 'DoneWithErrors', 'Stopped'].includes(status);
 
     // --- Real-time Error Handling ---
     if (payload) {
@@ -991,6 +994,27 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // --- End Real-time Error Handling ---
 
+    // --- Pending Cleanup Handling ---
+    if (isFinalState) {
+        const files = payload?.filesToDelete;
+        if (files && files.length > 0) {
+            // Show button if auto-cleanup is off, or if it was on but didn't run because of errors/stop.
+            const showCleanupButton = !appSettings.autoCleanup || status !== 'Done';
+            if (showCleanupButton) {
+                pendingCleanups[jobId] = files;
+                cleanupBtn.classList.remove('hidden');
+            } else {
+                // Auto cleanup ran, so no manual action needed.
+                delete pendingCleanups[jobId];
+                cleanupBtn.classList.add('hidden');
+            }
+        } else {
+            // If a job finishes and there's nothing to delete, clear any old pending state.
+            delete pendingCleanups[jobId];
+            cleanupBtn.classList.add('hidden');
+        }
+    }
+
     const isCounting = (status === 'Scanning' && progress < 0);
     if (isCounting) {
       const textNode = document.createTextNode(` ${message}`);
@@ -1021,7 +1045,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (status === 'Cleaning') jobEl.classList.add('is-cleaning');
 
     // When a job reaches a final state, remove the 'is-stopping' flag.
-    if (['Error', 'Done', 'DoneWithErrors', 'Stopped'].includes(status)) {
+    if (isFinalState) {
       jobEl.classList.remove('is-stopping');
     }
 
@@ -1071,19 +1095,7 @@ document.addEventListener('DOMContentLoaded', () => {
       jobEl.classList.add('is-warning');
     }
     
-    if (status === 'Done' || status === 'DoneWithErrors') {
-      if (payload && payload.filesToDelete && payload.filesToDelete.length > 0) {
-        if (!appSettings.autoCleanup) { // Only show manual cleanup button if auto cleanup is off
-            pendingCleanups[jobId] = payload.filesToDelete;
-            cleanupBtn.classList.remove('hidden');
-        }
-      } else {
-        delete pendingCleanups[jobId];
-        cleanupBtn.classList.add('hidden');
-      }
-    }
-
-    if (['Error', 'Done', 'DoneWithErrors', 'Stopped'].includes(status)) {
+    if (isFinalState) {
       if (isBatchRunning) {
         setTimeout(processJobQueue, 500);
       }
