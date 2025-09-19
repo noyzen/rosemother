@@ -135,13 +135,6 @@
         <div class="log-controls">
           <input type="text" id="log-search-input" placeholder="Search logs..." />
           <button id="refresh-log-btn" class="btn btn-secondary" title="Refresh logs"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
-          <div class="toggle-switch-container">
-            <label for="logging-enabled-toggle" class="toggle-label">Enable Logging</label>
-            <label class="toggle-switch">
-              <input type="checkbox" id="logging-enabled-toggle">
-              <span class="slider"></span>
-            </label>
-          </div>
           <button id="copy-log-btn" class="btn btn-secondary"><i class="fa-solid fa-copy"></i> Copy</button>
           <button id="clear-log-btn" class="btn btn-danger"><i class="fa-solid fa-trash-can"></i> Clear</button>
           <button id="close-log-btn" class="btn btn-secondary"><i class="fa-solid fa-times"></i></button>
@@ -168,52 +161,93 @@
 
   <!-- Settings Modal -->
   <div id="settings-modal" class="modal-overlay hidden">
-    <div class="modal-content">
+    <div class="modal-content modal-settings">
       <div class="modal-header">
          <h2 id="settings-modal-title">Settings</h2>
          <button id="close-settings-btn" class="btn-icon" aria-label="Close Settings"><i class="fa-solid fa-times"></i></button>
       </div>
-      <div class="form-scroll-content">
-        <div class="settings-section">
-          <h3>Job Management</h3>
-          <div class="settings-actions">
-             <button id="import-jobs-btn" class="btn btn-secondary"><i class="fa-solid fa-file-import"></i> Import Jobs</button>
-             <button id="export-jobs-btn" class="btn btn-secondary"><i class="fa-solid fa-file-export"></i> Export Jobs</button>
-          </div>
+      <div class="settings-body">
+        <div class="settings-nav">
+          <button class="settings-nav-btn active" data-target="settings-pane-general"><i class="fa-solid fa-sliders"></i> General</button>
+          <button class="settings-nav-btn" data-target="settings-pane-backup"><i class="fa-solid fa-shield-halved"></i> Backup</button>
+          <button class="settings-nav-btn" data-target="settings-pane-data"><i class="fa-solid fa-database"></i> Data</button>
         </div>
-        
-        <div class="settings-section">
-            <h3>Backup Behavior</h3>
-            <div class="form-group-row">
-              <label for="auto-cleanup-toggle" class="setting-label">Enable Auto Cleanup</label>
-              <div class="form-group-control">
+        <div class="settings-content">
+          <!-- General Pane -->
+          <div class="settings-pane active" id="settings-pane-general">
+            <div class="setting-item">
+              <div class="setting-item-text">
+                <h4>Enable Logging</h4>
+                <p>Records application activity for troubleshooting. Can be disabled for minor performance gains.</p>
+              </div>
+              <div class="setting-item-control">
                 <label class="toggle-switch">
-                  <input type="checkbox" id="auto-cleanup-toggle">
+                  <input type="checkbox" id="logging-enabled-toggle">
                   <span class="slider"></span>
                 </label>
-                <p class="setting-description">If enabled, automatically delete files from the destination if they are removed from the source. This applies to all jobs.</p>
               </div>
             </div>
-            <div class="form-group-row">
-              <label for="prevent-sleep-toggle" class="setting-label">Prevent System Sleep</label>
-              <div class="form-group-control">
+            <div class="setting-item">
+              <div class="setting-item-text">
+                <h4>Prevent System Sleep</h4>
+                <p>Prevents the computer from entering sleep or idle mode while a backup job is running.</p>
+              </div>
+              <div class="setting-item-control">
                 <label class="toggle-switch">
                   <input type="checkbox" id="prevent-sleep-toggle">
                   <span class="slider"></span>
                 </label>
-                <p class="setting-description">Prevents the computer from entering sleep or idle mode while a backup job is running.</p>
               </div>
             </div>
-            <div class="form-group-row">
-              <label for="shutdown-on-completion-toggle" class="setting-label">Shutdown on Completion</label>
-              <div class="form-group-control">
+            <div class="setting-item">
+              <div class="setting-item-text">
+                <h4>Shutdown on Completion</h4>
+                <p>Automatically shut down the computer after a "Start All" batch run is completed. This is not saved and must be enabled each session.</p>
+              </div>
+              <div class="setting-item-control">
                 <label class="toggle-switch">
                   <input type="checkbox" id="shutdown-on-completion-toggle">
                   <span class="slider"></span>
                 </label>
-                <p class="setting-description">If enabled, the computer will automatically shut down after all jobs in a batch run are completed. This setting is not saved and must be enabled each session.</p>
               </div>
             </div>
+          </div>
+          <!-- Backup Pane -->
+          <div class="settings-pane" id="settings-pane-backup">
+            <div class="setting-item">
+              <div class="setting-item-text">
+                <h4>Enable Auto Cleanup</h4>
+                <p>If enabled, automatically delete files from the destination if they are removed from the source. This applies to all jobs and runs after a successful backup.</p>
+              </div>
+              <div class="setting-item-control">
+                <label class="toggle-switch">
+                  <input type="checkbox" id="auto-cleanup-toggle">
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <!-- Data Pane -->
+          <div class="settings-pane" id="settings-pane-data">
+            <div class="setting-item">
+              <div class="setting-item-text">
+                <h4>Export Jobs</h4>
+                <p>Save all your current job configurations to a JSON file. This file can be used for backup or to import your jobs on another machine.</p>
+              </div>
+              <div class="setting-item-control">
+                <button id="export-jobs-btn" class="btn btn-secondary"><i class="fa-solid fa-file-export"></i> Export Jobs</button>
+              </div>
+            </div>
+            <div class="setting-item">
+              <div class="setting-item-text">
+                <h4>Import Jobs</h4>
+                <p>Load job configurations from a previously exported JSON file. Jobs that already exist (same source and destination) will be skipped.</p>
+              </div>
+              <div class="setting-item-control">
+                <button id="import-jobs-btn" class="btn btn-secondary"><i class="fa-solid fa-file-import"></i> Import Jobs</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

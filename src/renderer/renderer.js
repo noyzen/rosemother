@@ -31,7 +31,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const logModal = document.getElementById('log-modal');
   const logListContainer = document.getElementById('log-list-container');
   const logSearchInput = document.getElementById('log-search-input');
-  const loggingEnabledToggle = document.getElementById('logging-enabled-toggle');
   const refreshLogBtn = document.getElementById('refresh-log-btn');
 
   // Job Errors Modal
@@ -43,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Settings Modal Elements
   const settingsModal = document.getElementById('settings-modal');
+  const loggingEnabledToggle = document.getElementById('logging-enabled-toggle');
   const closeSettingsBtn = document.getElementById('close-settings-btn');
   const exportJobsBtn = document.getElementById('export-jobs-btn');
   const importJobsBtn = document.getElementById('import-jobs-btn');
@@ -146,24 +146,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   logSearchInput.addEventListener('input', () => renderLogs(logSearchInput.value));
   
-  loggingEnabledToggle.addEventListener('change', e => {
-    appSettings.loggingEnabled = e.target.checked;
-    saveSettings();
-
-    if (appSettings.loggingEnabled) {
-        addLog('WARN', 'Logging has been enabled.');
-    } else {
-        const msg = 'Logging has been disabled. New events will not be recorded.';
-        logs.push({
-            timestamp: new Date(),
-            level: 'WARN',
-            message: msg
-        });
-        if (!logModal.classList.contains('hidden')) {
-            renderLogs(logSearchInput.value);
-        }
-    }
-  });
   // --- End Logging System ---
 
   // --- Job Errors Panel ---
@@ -296,8 +278,6 @@ document.addEventListener('DOMContentLoaded', () => {
       
       stopAllBtn.disabled = false;
       stopAllBtn.innerHTML = '<i class="fa-solid fa-stop-circle"></i> Stop All';
-
-      isBatchRunning = false;
     }
   };
 
@@ -328,7 +308,9 @@ document.addEventListener('DOMContentLoaded', () => {
             jobEl.classList.add('is-warning');
         }
         jobEl.dataset.id = job.id;
-        jobEl.draggable = true;
+        jobEl.draggable = runningJobs.size === 0;
+
+        const isJobEditable = !runningJobs.has(job.id) && !isBatchRunning;
 
         jobEl.innerHTML = `
             <div class="job-drag-handle" title="Drag to reorder"><i class="fa-solid fa-grip-vertical"></i></div>
@@ -374,10 +356,10 @@ document.addEventListener('DOMContentLoaded', () => {
                      <div class="job-actions">
                         <button class="btn btn-sm btn-warning btn-view-errors ${hasPersistedErrors ? '' : 'hidden'}" title="View Errors"><i class="fa-solid fa-triangle-exclamation"></i> Errors${hasPersistedErrors ? ` (${errorCount})` : ''}</button>
                         <button class="btn btn-sm btn-warning btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" title="Cleanup Files"><i class="fa-solid fa-broom"></i> Cleanup</button>
-                        <button class="btn btn-sm btn-primary btn-start-stop" title="Start Backup"><i class="fa-solid fa-play"></i> Start</button>
+                        <button class="btn btn-sm btn-primary btn-start-stop" title="${isBatchRunning ? 'Batch run in progress' : 'Start Backup'}" ${isBatchRunning ? 'disabled' : ''}><i class="fa-solid fa-play"></i> Start</button>
                         <div class="job-actions-divider"></div>
-                        <button class="btn btn-sm btn-secondary btn-edit" title="Edit Job"><i class="fa-solid fa-pencil"></i> Edit</button>
-                        <button class="btn btn-sm btn-secondary btn-delete" title="Delete Job"><i class="fa-solid fa-trash-can"></i> Delete</button>
+                        <button class="btn btn-sm btn-secondary btn-edit" title="Edit Job" ${!isJobEditable ? 'disabled' : ''}><i class="fa-solid fa-pencil"></i> Edit</button>
+                        <button class="btn btn-sm btn-secondary btn-delete" title="Delete Job" ${!isJobEditable ? 'disabled' : ''}><i class="fa-solid fa-trash-can"></i> Delete</button>
                     </div>
                 </div>
             </div>`;
@@ -413,6 +395,20 @@ document.addEventListener('DOMContentLoaded', () => {
     appSettings.autoCleanup = autoCleanupToggle.checked;
     await window.electronAPI.setSettings(appSettings);
     addLog('INFO', `Settings saved (Logging: ${appSettings.loggingEnabled}, Prevent Sleep: ${appSettings.preventSleep}, Auto Cleanup: ${appSettings.autoCleanup}).`);
+    
+    if (appSettings.loggingEnabled) {
+        addLog('WARN', 'Logging has been enabled.');
+    } else {
+        const msg = 'Logging has been disabled. New events will not be recorded.';
+        logs.push({
+            timestamp: new Date(),
+            level: 'WARN',
+            message: msg
+        });
+        if (!logModal.classList.contains('hidden')) {
+            renderLogs(logSearchInput.value);
+        }
+    }
   };
 
   const renderExclusionRule = (listEl, text) => {
@@ -637,6 +633,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Drag and Drop Logic ---
   let draggedId = null;
 
+  const updateJobsDraggableState = () => {
+    const canDrag = runningJobs.size === 0;
+    document.querySelectorAll('.job-item').forEach(el => {
+        el.draggable = canDrag;
+    });
+  };
+
   jobsListEl.addEventListener('dragstart', e => {
     const target = e.target.closest('.job-item');
     if (target) {
@@ -731,13 +734,18 @@ document.addEventListener('DOMContentLoaded', () => {
             // Clear errors and pending cleanups from previous run for this job
             delete jobErrors[jobId];
             delete pendingCleanups[jobId];
+            
+            if (runningJobs.size === 0) {
+              updateJobsDraggableState(); // Disable dragging as soon as the first job starts
+            }
+            runningJobs.add(jobId);
+
             jobItem.querySelector('.btn-cleanup').classList.add('hidden');
             jobItem.classList.remove('is-warning');
             jobItem.querySelector('.btn-view-errors').classList.add('hidden');
             jobItem.querySelector('.status-warning').classList.add('hidden');
             jobItem.querySelector('.status-text').textContent = 'Starting...';
 
-            runningJobs.add(jobId);
             updateHeaderActionsState();
 
             button.disabled = true;
@@ -822,7 +830,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (shutdownOnCompletion) {
             initiateShutdown();
         }
-        updateHeaderActionsState();
+        renderJobs(); // Re-render to re-enable controls
         return;
     }
     const jobId = jobQueue.shift();
@@ -832,10 +840,9 @@ document.addEventListener('DOMContentLoaded', () => {
   startAllBtn.addEventListener('click', () => {
     if (runningJobs.size > 0 || isBatchRunning) return;
     isBatchRunning = true;
-    startAllBtn.disabled = true;
-    startAllBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Running All';
     jobQueue = jobs.map(j => j.id);
     addLog('INFO', 'Starting batch run for all jobs.');
+    renderJobs(); // Re-render to disable controls
     processJobQueue();
   });
   
@@ -878,8 +885,24 @@ document.addEventListener('DOMContentLoaded', () => {
   settingsBtn.addEventListener('click', () => settingsModal.classList.remove('hidden'));
   closeSettingsBtn.addEventListener('click', () => settingsModal.classList.add('hidden'));
   
+  loggingEnabledToggle.addEventListener('change', saveSettings);
   autoCleanupToggle.addEventListener('change', saveSettings);
   preventSleepToggle.addEventListener('change', saveSettings);
+
+  const settingsNav = document.querySelector('.settings-nav');
+  const settingsPanes = document.querySelectorAll('.settings-pane');
+  settingsNav.addEventListener('click', (e) => {
+    const button = e.target.closest('button');
+    if (!button) return;
+
+    settingsNav.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
+    button.classList.add('active');
+
+    const targetPaneId = button.dataset.target;
+    settingsPanes.forEach(pane => {
+      pane.classList.toggle('active', pane.id === targetPaneId);
+    });
+  });
 
   exportJobsBtn.addEventListener('click', async () => {
     addLog('INFO', 'Attempting to export jobs...');
@@ -1046,6 +1069,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // When a job reaches a final state, remove the 'is-stopping' flag.
     if (isFinalState) {
+      if (runningJobs.has(jobId)) {
+          runningJobs.delete(jobId);
+          if (runningJobs.size === 0) {
+              updateJobsDraggableState(); // Re-enable dragging if this was the last job
+          }
+      }
       jobEl.classList.remove('is-stopping');
     }
 
@@ -1055,13 +1084,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isStopping) {
       // State is handled by the click handler. Do nothing to the button's appearance.
     } else if (isRunning) {
-      runningJobs.add(jobId);
       startStopBtn.innerHTML = '<i class="fa-solid fa-stop"></i> Stop';
       startStopBtn.setAttribute('title', 'Stop Backup');
       startStopBtn.classList.add('is-stop', 'btn-danger');
       startStopBtn.classList.remove('btn-primary');
     } else {
-      runningJobs.delete(jobId);
       startStopBtn.innerHTML = '<i class="fa-solid fa-play"></i> Start';
       startStopBtn.setAttribute('title', 'Start Backup');
       startStopBtn.classList.remove('is-stop', 'btn-danger');
@@ -1070,8 +1097,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // A job is busy if it's running or if a stop command has been issued.
     const isBusy = isRunning || isStopping;
-    [...jobEl.querySelectorAll('.btn-edit, .btn-delete')].forEach(b => b.disabled = isBusy);
-    startStopBtn.disabled = isStopping;
+    [...jobEl.querySelectorAll('.btn-edit, .btn-delete')].forEach(b => b.disabled = isBusy || isBatchRunning);
+    startStopBtn.disabled = isStopping || (isBatchRunning && !isRunning);
     cleanupBtn.disabled = isBusy;
 
     if (status === 'Copying' && payload && payload.eta > 0) {
@@ -1159,6 +1186,7 @@ document.addEventListener('DOMContentLoaded', () => {
     jobErrors = await window.electronAPI.getJobErrors();
     addLog('INFO', `Loaded ${Object.keys(jobErrors).length} persisted job error logs.`);
     renderJobs();
+    updateJobsDraggableState();
   }
 
   initializeApp();
