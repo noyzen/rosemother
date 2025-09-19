@@ -3,6 +3,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const emptyStateEl = document.getElementById('empty-state');
   const addJobBtn = document.getElementById('add-job-btn');
   const startAllBtn = document.getElementById('start-all-btn');
+  const stopAllBtn = document.getElementById('stop-all-btn');
   const logBtn = document.getElementById('log-btn');
   
   // Header buttons
@@ -168,12 +169,36 @@ document.addEventListener('DOMContentLoaded', () => {
     return `~${seconds}s left`;
   };
 
+  const updateHeaderActionsState = () => {
+    const hasJobs = jobs.length > 0;
+    const isAnyJobRunning = runningJobs.size > 0;
+
+    if (!hasJobs) {
+      startAllBtn.classList.add('hidden');
+      stopAllBtn.classList.add('hidden');
+      return;
+    }
+
+    if (isAnyJobRunning) {
+      startAllBtn.classList.add('hidden');
+      stopAllBtn.classList.remove('hidden');
+    } else {
+      startAllBtn.classList.remove('hidden');
+      startAllBtn.disabled = false;
+      startAllBtn.innerHTML = '<i class="fa-solid fa-play-circle"></i> Start All';
+      
+      stopAllBtn.classList.add('hidden');
+      stopAllBtn.disabled = false;
+      stopAllBtn.innerHTML = '<i class="fa-solid fa-stop-circle"></i> Stop All';
+
+      isBatchRunning = false;
+    }
+  };
+
   const renderJobs = () => {
     const hasJobs = jobs.length > 0;
     jobsListEl.classList.toggle('hidden', !hasJobs);
-    startAllBtn.classList.toggle('hidden', !hasJobs);
     
-    // Fix: Correctly toggle empty state visibility.
     emptyStateEl.classList.toggle('hidden', jobs.length > 0);
 
     jobsListEl.innerHTML = '';
@@ -252,6 +277,7 @@ document.addEventListener('DOMContentLoaded', () => {
         jobsListEl.appendChild(jobEl);
       });
     }
+    updateHeaderActionsState();
   };
 
   const saveJobs = async () => {
@@ -613,12 +639,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const processJobQueue = () => {
     if (jobQueue.length === 0) {
         isBatchRunning = false;
-        startAllBtn.disabled = false;
-        startAllBtn.innerHTML = '<i class="fa-solid fa-play-circle"></i> Start All';
         addLog('SUCCESS', 'Batch run for all jobs completed.');
         if (shutdownOnCompletion) {
             initiateShutdown();
         }
+        updateHeaderActionsState();
         return;
     }
     const jobId = jobQueue.shift();
@@ -626,7 +651,7 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   startAllBtn.addEventListener('click', () => {
-    if (isBatchRunning) return;
+    if (runningJobs.size > 0 || isBatchRunning) return;
     isBatchRunning = true;
     startAllBtn.disabled = true;
     startAllBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Running All';
@@ -635,6 +660,41 @@ document.addEventListener('DOMContentLoaded', () => {
     processJobQueue();
   });
   
+  stopAllBtn.addEventListener('click', async () => {
+    if (runningJobs.size === 0) return;
+    
+    const confirmed = await showConfirm(
+        'Stop All Jobs?',
+        `Are you sure you want to request a stop for all ${runningJobs.size} running job(s)?`,
+        'danger'
+    );
+
+    if (confirmed) {
+      addLog('WARN', 'User requested to stop all running jobs.');
+      if (isBatchRunning) {
+          jobQueue = [];
+          addLog('INFO', 'The active job queue has been cleared.');
+      }
+
+      stopAllBtn.disabled = true;
+      stopAllBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Stopping All';
+      
+      runningJobs.forEach(jobId => {
+        window.electronAPI.stopJob(jobId);
+        const jobEl = document.querySelector(`.job-item[data-id="${jobId}"]`);
+        if (jobEl && !jobEl.classList.contains('is-stopping')) {
+            jobEl.classList.add('is-stopping');
+            const startStopBtn = jobEl.querySelector('.btn-start-stop');
+            if (startStopBtn) {
+                startStopBtn.disabled = true;
+                startStopBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Stopping...';
+                startStopBtn.setAttribute('title', 'Stopping...');
+            }
+        }
+      });
+    }
+  });
+
   // --- Settings Modal ---
   settingsBtn.addEventListener('click', () => settingsModal.classList.remove('hidden'));
   closeSettingsBtn.addEventListener('click', () => settingsModal.classList.add('hidden'));
@@ -846,6 +906,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       }, 8000);
     }
+
+    updateHeaderActionsState();
   });
   
   window.electronAPI.onCleanupComplete(({ jobId, success }) => {
