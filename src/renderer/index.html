@@ -14,10 +14,6 @@
     <header id="app-header">
       <h1><i class="fa-solid fa-shield-halved"></i> Rosemother</h1>
       <div id="header-actions">
-        <button id="log-btn" class="btn btn-secondary" aria-label="Show Logs">
-          <i class="fa-solid fa-file-lines"></i> Logs
-        </button>
-        <div class="action-separator"></div>
         <button id="start-all-btn" class="btn btn-primary" aria-label="Start All Jobs">
           <i class="fa-solid fa-play-circle"></i> Start All
         </button>
@@ -127,29 +123,12 @@
     </div>
   </div>
 
-  <!-- Log Viewer Modal -->
-  <div id="log-modal" class="modal-overlay hidden">
-    <div class="modal-content modal-log-viewer">
-      <div class="log-header">
-        <h2><i class="fa-solid fa-file-waveform"></i> Application Logs</h2>
-        <div class="log-controls">
-          <input type="text" id="log-search-input" placeholder="Search logs..." />
-          <button id="refresh-log-btn" class="btn btn-secondary" title="Refresh logs"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
-          <button id="copy-log-btn" class="btn btn-secondary"><i class="fa-solid fa-copy"></i> Copy</button>
-          <button id="clear-log-btn" class="btn btn-danger"><i class="fa-solid fa-trash-can"></i> Clear</button>
-          <button id="close-log-btn" class="btn btn-secondary"><i class="fa-solid fa-times"></i></button>
-        </div>
-      </div>
-      <div id="log-list-container"></div>
-    </div>
-  </div>
-
   <!-- Job Errors Modal -->
   <div id="errors-modal" class="modal-overlay hidden">
-    <div class="modal-content modal-log-viewer">
-      <div class="log-header">
+    <div class="modal-content modal-errors-viewer">
+      <div class="errors-header">
         <h2 id="errors-modal-title"><i class="fa-solid fa-triangle-exclamation"></i> Job Copy Errors</h2>
-        <div class="log-controls">
+        <div class="errors-controls">
           <input type="hidden" id="errors-modal-job-id" />
           <input type="text" id="errors-search-input" placeholder="Filter by path or error reason..." />
           <button id="clear-current-job-errors-btn" class="btn btn-danger"><i class="fa-solid fa-trash-can"></i> Clear These Errors</button>
@@ -176,18 +155,6 @@
         <div class="settings-content">
           <!-- General Pane -->
           <div class="settings-pane active" id="settings-pane-general">
-            <div class="setting-item">
-              <div class="setting-item-text">
-                <h4>Enable Logging</h4>
-                <p>Records application activity for troubleshooting. Can be disabled for minor performance gains.</p>
-              </div>
-              <div class="setting-item-control">
-                <label class="toggle-switch">
-                  <input type="checkbox" id="logging-enabled-toggle">
-                  <span class="slider"></span>
-                </label>
-              </div>
-            </div>
             <div class="setting-item">
               <div class="setting-item-text">
                 <h4>Prevent System Sleep</h4>

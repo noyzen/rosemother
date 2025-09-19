@@ -22,5 +22,4 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Main to Renderer
   onJobUpdate: (callback) => ipcRenderer.on('job:update', (_event, value) => callback(value)),
   onCleanupComplete: (callback) => ipcRenderer.on('job:cleanup-complete', (_event, value) => callback(value)),
-  onLogMessage: (callback) => ipcRenderer.on('log:message', (_event, value) => callback(value)),
 });

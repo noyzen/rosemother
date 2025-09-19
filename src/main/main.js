@@ -8,7 +8,6 @@ const WindowState = require('electron-window-state');
 const Store = require('electron-store');
 
 const store = new Store();
-let isLoggingEnabled = store.get('settings', { loggingEnabled: true, preventSleep: false, autoCleanup: false }).loggingEnabled;
 const stopFlags = new Map();
 const runningJobsInMain = new Set();
 let powerSaveBlockerId = null;
@@ -26,15 +25,6 @@ if (!gotTheLock) {
 }
 
 let mainWindow;
-
-function logToRenderer(level, message) {
-    if (!isLoggingEnabled) return;
-    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
-        mainWindow.webContents.send('log:message', { level, message });
-    }
-    const levelMap = { INFO: 'log', WARN: 'warn', ERROR: 'error', SUCCESS: 'log' };
-    (console[levelMap[level]] || console.log)(`[${level}] ${message}`);
-}
 
 function sendUpdateForJob(jobId, status, progress = 0, message = '', payload = {}) {
     if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
@@ -70,7 +60,7 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   mainWindow.webContents.on('did-finish-load', () => {
-    logToRenderer('INFO', 'Application successfully started.');
+    console.log('[INFO] Application successfully started.');
   });
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -120,14 +110,14 @@ ipcMain.handle('dialog:saveJson', async (event, content) => {
     if (!canceled && filePath) {
         try {
             await fs.writeFile(filePath, content);
-            logToRenderer('SUCCESS', `Successfully exported jobs to ${filePath}`);
+            console.log(`[SUCCESS] Successfully exported jobs to ${filePath}`);
             return { success: true };
         } catch (error) {
-            logToRenderer('ERROR', `Failed to save file: ${error.message}`);
+            console.error(`[ERROR] Failed to save file: ${error.message}`);
             return { success: false, error: error.message };
         }
     }
-    logToRenderer('INFO', 'Job export was canceled by user.');
+    console.log('[INFO] Job export was canceled by user.');
     return { success: false, error: 'Save dialog canceled.' };
 });
 
@@ -140,14 +130,14 @@ ipcMain.handle('dialog:openJson', async () => {
     if (!canceled && filePaths.length > 0) {
         try {
             const content = await fs.readFile(filePaths[0], 'utf-8');
-            logToRenderer('INFO', `Reading jobs for import from ${filePaths[0]}`);
+            console.log(`[INFO] Reading jobs for import from ${filePaths[0]}`);
             return { success: true, content };
         } catch (error) {
-            logToRenderer('ERROR', `Failed to read file for import: ${error.message}`);
+            console.error(`[ERROR] Failed to read file for import: ${error.message}`);
             return { success: false, error: error.message };
         }
     }
-    logToRenderer('INFO', 'Job import was canceled by user.');
+    console.log('[INFO] Job import was canceled by user.');
     return { success: false, error: 'Open dialog canceled.' };
 });
 
@@ -155,11 +145,8 @@ ipcMain.handle('jobs:get', () => store.get('jobs', []));
 ipcMain.handle('jobs:set', (event, jobs) => store.set('jobs', jobs));
 ipcMain.handle('jobErrors:get', () => store.get('jobErrors', {}));
 ipcMain.handle('jobErrors:set', (event, errors) => store.set('jobErrors', errors));
-ipcMain.handle('settings:get', () => store.get('settings', { loggingEnabled: true, preventSleep: false, autoCleanup: false }));
+ipcMain.handle('settings:get', () => store.get('settings', { preventSleep: false, autoCleanup: false }));
 ipcMain.handle('settings:set', (event, settings) => {
-    if (typeof settings.loggingEnabled !== 'undefined') {
-        isLoggingEnabled = settings.loggingEnabled;
-    }
     store.set('settings', settings);
 });
 
@@ -190,7 +177,7 @@ function isExcluded(relativePath, jobExclusions) {
 }
 
 async function countFiles(startPath, jobId, job = null) {
-    logToRenderer('INFO', `Job ${jobId}: countFiles started for path: ${startPath}`);
+    console.log(`[INFO] Job ${jobId}: countFiles started for path: ${startPath}`);
     let fileCount = 0;
     let dirCount = 0;
     const queue = [startPath];
@@ -198,7 +185,7 @@ async function countFiles(startPath, jobId, job = null) {
 
     while (queue.length > 0) {
         if (stopFlags.has(jobId)) {
-            logToRenderer('WARN', `Job ${jobId}: countFiles received stop signal.`);
+            console.warn(`[WARN] Job ${jobId}: countFiles received stop signal.`);
             throw new Error('COUNT_STOPPED');
         }
         const currentPath = queue.shift();
@@ -206,14 +193,14 @@ async function countFiles(startPath, jobId, job = null) {
         // Periodically log progress
         dirCount++;
         if (dirCount % LOG_INTERVAL === 0) {
-            logToRenderer('INFO', `Job ${jobId}: countFiles progress - Dirs processed: ${dirCount}, Queue size: ${queue.length}. Next to process: ${currentPath}`);
+            console.log(`[INFO] Job ${jobId}: countFiles progress - Dirs processed: ${dirCount}, Queue size: ${queue.length}. Next to process: ${currentPath}`);
         }
 
         let dirents;
         try {
             dirents = await fs.readdir(currentPath, { withFileTypes: true });
         } catch (e) {
-            logToRenderer('WARN', `Job ${jobId}: countFiles could not read directory ${currentPath}. Error: ${e.message}`);
+            console.warn(`[WARN] Job ${jobId}: countFiles could not read directory ${currentPath}. Error: ${e.message}`);
             continue;
         }
 
@@ -232,7 +219,7 @@ async function countFiles(startPath, jobId, job = null) {
             }
         }
     }
-    logToRenderer('INFO', `Job ${jobId}: countFiles finished for path: ${startPath}. Total files: ${fileCount}, Dirs: ${dirCount}.`);
+    console.log(`[INFO] Job ${jobId}: countFiles finished for path: ${startPath}. Total files: ${fileCount}, Dirs: ${dirCount}.`);
     return fileCount;
 }
 
@@ -241,7 +228,7 @@ async function performCleanup(job, files, progressCallback) {
     if (!job || !files || files.length === 0) {
         return { success: false, error: "Job or files not found." };
     }
-    logToRenderer('INFO', `Starting cleanup for job ${job.id}. Deleting ${files.length} items.`);
+    console.log(`[INFO] Starting cleanup for job ${job.id}. Deleting ${files.length} items.`);
     try {
         const filesToDelete = files.filter(item => item.type === 'file').map(item => item.path);
         const dirsToDelete = files.filter(item => item.type === 'dir').map(item => item.path);
@@ -250,7 +237,7 @@ async function performCleanup(job, files, progressCallback) {
         let deletedCount = 0;
 
         for (const relativePath of filesToDelete) {
-            await fs.rm(path.join(job.destination, relativePath), { force: true }).catch(err => logToRenderer('ERROR', `Failed to delete file ${relativePath}: ${err.message}`));
+            await fs.rm(path.join(job.destination, relativePath), { force: true }).catch(err => console.error(`[ERROR] Failed to delete file ${relativePath}: ${err.message}`));
             deletedCount++;
             if (progressCallback) {
                 const progress = totalCount > 0 ? (deletedCount / totalCount) * 100 : 100;
@@ -260,23 +247,23 @@ async function performCleanup(job, files, progressCallback) {
 
         dirsToDelete.sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
         for (const relativePath of dirsToDelete) {
-            await fs.rm(path.join(job.destination, relativePath), { recursive: true, force: true }).catch(err => logToRenderer('ERROR', `Failed to delete directory ${relativePath}: ${err.message}`));
+            await fs.rm(path.join(job.destination, relativePath), { recursive: true, force: true }).catch(err => console.error(`[ERROR] Failed to delete directory ${relativePath}: ${err.message}`));
             deletedCount++;
             if (progressCallback) {
                 const progress = totalCount > 0 ? (deletedCount / totalCount) * 100 : 100;
                 progressCallback(progress, `Deleting folder ${deletedCount} of ${totalCount}`);
             }
         }
-        logToRenderer('SUCCESS', `Cleanup for job ${job.id} completed.`);
+        console.log(`[SUCCESS] Cleanup for job ${job.id} completed.`);
         return { success: true };
     } catch (error) {
-        logToRenderer('ERROR', `Error during cleanup for job ${job.id}: ${error.message}`);
+        console.error(`[ERROR] Error during cleanup for job ${job.id}: ${error.message}`);
         return { success: false, error: error.message };
     }
 }
 
 ipcMain.on('job:stop', (event, jobId) => {
-    logToRenderer('WARN', `Stop request received for job ${jobId}.`);
+    console.warn(`[WARN] Stop request received for job ${jobId}.`);
     stopFlags.set(jobId, true);
 });
 
@@ -295,7 +282,7 @@ function calculateOrphans(sourcePaths, destIndex, completedDirs) {
 
 ipcMain.on('job:start', async (event, jobId) => {
     if (runningJobsInMain.has(jobId)) {
-        logToRenderer('WARN', `Job ${jobId} is already running. Start request ignored.`);
+        console.warn(`[WARN] Job ${jobId} is already running. Start request ignored.`);
         return;
     }
 
@@ -310,7 +297,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         store.set('jobErrors', allErrorsStore);
     }
 
-    const settings = store.get('settings', { loggingEnabled: true, preventSleep: false, autoCleanup: false });
+    const settings = store.get('settings', { preventSleep: false, autoCleanup: false });
     const sendUpdate = (status, progress, message, payload) => sendUpdateForJob(jobId, status, progress, message, payload);
 
     const indexesPath = path.join(app.getPath('userData'), 'job_indexes');
@@ -331,7 +318,7 @@ ipcMain.on('job:start', async (event, jobId) => {
                 const indexToSave = { destinationPath: job.destination, files: destIndex };
                 await fs.writeFile(tempIndexFilePath, JSON.stringify(indexToSave));
             } catch (e) {
-                logToRenderer('WARN', `Job ${jobId}: Periodic index save failed: ${e.message}`);
+                console.warn(`[WARN] Job ${jobId}: Periodic index save failed: ${e.message}`);
             }
         }, SAVE_INTERVAL);
     };
@@ -347,12 +334,12 @@ ipcMain.on('job:start', async (event, jobId) => {
             if (settings.preventSleep) {
                 powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension');
                 if (powerSaveBlocker.isStarted(powerSaveBlockerId)) {
-                    logToRenderer('INFO', 'System sleep is being prevented during job execution.');
+                    console.log('[INFO] System sleep is being prevented during job execution.');
                 }
             }
         }
         
-        logToRenderer('INFO', `Job ${jobId} started.`);
+        console.log(`[INFO] Job ${jobId} started.`);
 
         try {
             await fs.access(job.source);
@@ -360,7 +347,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         } catch (err) {
             const errorMessage = `Path not found or accessible: ${err.path}.`;
             sendUpdate('Error', 0, errorMessage, { errorType: 'PATH_ERROR' });
-            logToRenderer('ERROR', `Job ${jobId} failed: ${errorMessage}`);
+            console.error(`[ERROR] Job ${jobId} failed: ${errorMessage}`);
             return;
         }
 
@@ -372,13 +359,13 @@ ipcMain.on('job:start', async (event, jobId) => {
             const indexData = await fs.readFile(indexFilePath, 'utf-8');
             const parsedIndex = JSON.parse(indexData);
             if (parsedIndex.destinationPath !== job.destination) {
-                logToRenderer('WARN', `Job ${jobId}: Destination path has changed. Rebuilding index.`);
+                console.warn(`[WARN] Job ${jobId}: Destination path has changed. Rebuilding index.`);
                 needsIndexBuild = true;
             } else {
                 destIndex = parsedIndex.files || {};
             }
         } catch (e) {
-            logToRenderer('WARN', `Job ${jobId}: Destination index not found or corrupted. A new one will be built.`);
+            console.warn(`[WARN] Job ${jobId}: Destination index not found or corrupted. A new one will be built.`);
             needsIndexBuild = true;
         }
 
@@ -387,17 +374,17 @@ ipcMain.on('job:start', async (event, jobId) => {
             sendUpdate('Scanning', -1, 'Counting destination files...');
             let totalFileCount = 0;
             try {
-                logToRenderer('INFO', `Job ${jobId}: Starting to count destination files at ${job.destination}.`);
+                console.log(`[INFO] Job ${jobId}: Starting to count destination files at ${job.destination}.`);
                 totalFileCount = await countFiles(job.destination, jobId);
                 if (stopFlags.has(jobId)) { throw new Error('COUNT_STOPPED'); } // Re-check after long operation
-                logToRenderer('INFO', `Job ${jobId}: Finished counting. Found approx ${totalFileCount.toLocaleString()} files in destination.`);
+                console.log(`[INFO] Job ${jobId}: Finished counting. Found approx ${totalFileCount.toLocaleString()} files in destination.`);
             } catch (err) {
                 if (err.message === 'COUNT_STOPPED') {
-                    logToRenderer('WARN', `Job ${jobId}: Stop requested during destination file count.`);
+                    console.warn(`[WARN] Job ${jobId}: Stop requested during destination file count.`);
                     sendUpdate('Stopped', 0, 'Job stopped by user.');
                     return;
                 }
-                logToRenderer('WARN', `Job ${jobId}: Could not count dest files. Progress indeterminate. Error: ${err.message}`);
+                console.warn(`[WARN] Job ${jobId}: Could not count dest files. Progress indeterminate. Error: ${err.message}`);
             }
 
             if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
@@ -425,7 +412,7 @@ ipcMain.on('job:start', async (event, jobId) => {
                             const stats = await fs.stat(fullPath);
                             destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs };
                             scheduleSave();
-                        } catch (err) { logToRenderer('WARN', `Job ${jobId}: Could not scan ${relativePath}: ${err.message}`); }
+                        } catch (err) { console.warn(`[WARN] Job ${jobId}: Could not scan ${relativePath}: ${err.message}`); }
                     }
                 }
             }
@@ -436,17 +423,17 @@ ipcMain.on('job:start', async (event, jobId) => {
         sendUpdate('Scanning', -1, 'Counting source files...');
         let totalSourceFiles = 0;
         try {
-            logToRenderer('INFO', `Job ${jobId}: Starting to count source files at ${job.source}.`);
+            console.log(`[INFO] Job ${jobId}: Starting to count source files at ${job.source}.`);
             totalSourceFiles = await countFiles(job.source, jobId, job); // Pass job for exclusions
             if (stopFlags.has(jobId)) { throw new Error('COUNT_STOPPED'); } // Re-check
-            logToRenderer('INFO', `Job ${jobId}: Finished counting. Found approx ${totalSourceFiles.toLocaleString()} files in source.`);
+            console.log(`[INFO] Job ${jobId}: Finished counting. Found approx ${totalSourceFiles.toLocaleString()} files in source.`);
         } catch (err) {
             if (err.message === 'COUNT_STOPPED') { 
-                logToRenderer('WARN', `Job ${jobId}: Stop requested during source file count.`);
+                console.warn(`[WARN] Job ${jobId}: Stop requested during source file count.`);
                 sendUpdate('Stopped', 0, 'Job stopped by user.'); 
                 return; 
             }
-            logToRenderer('WARN', `Job ${jobId}: Could not count source files. Progress will be indeterminate.`);
+            console.warn(`[WARN] Job ${jobId}: Could not count source files. Progress will be indeterminate.`);
         }
 
         if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
@@ -513,7 +500,7 @@ ipcMain.on('job:start', async (event, jobId) => {
                         const newError = { path: relativePath, error: error.message };
                         copyErrors.push(newError);
                         const errorMessage = `Failed to process: ${relativePath}. ${error.message}`;
-                        logToRenderer('ERROR', `Job ${jobId}: ${errorMessage}`);
+                        console.error(`[ERROR] Job ${jobId}: ${errorMessage}`);
                         sendUpdate('Copying', progress, `Error: ${relativePath}`, {
                             processedFiles,
                             totalSourceFiles,
@@ -530,10 +517,10 @@ ipcMain.on('job:start', async (event, jobId) => {
         await syncDirectory('');
 
         if (stopFlags.has(jobId)) {
-            logToRenderer('WARN', `Job ${jobId} was stopped by the user.`);
+            console.warn(`[WARN] Job ${jobId} was stopped by the user.`);
             const toDelete = calculateOrphans(sourcePaths, destIndex, completedDirs);
             if (toDelete.length > 0) {
-                logToRenderer('INFO', `Job ${jobId}: Found ${toDelete.length} orphan items in destination based on partial scan.`);
+                console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items in destination based on partial scan.`);
             }
             sendUpdate('Stopped', 0, 'Job stopped by user.', { filesToDelete: toDelete });
             return;
@@ -550,7 +537,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         toDelete.forEach(item => {
             delete destIndex[item.path];
         });
-        logToRenderer('INFO', `Job ${jobId}: Found ${toDelete.length} orphan items in destination.`);
+        console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items in destination.`);
         
         let finalStatus = copyErrors.length > 0 ? 'DoneWithErrors' : 'Done';
         const payload = { 
@@ -566,11 +553,11 @@ ipcMain.on('job:start', async (event, jobId) => {
             });
             if (cleanupResult.success) {
                 finalMessage = `Backup and cleanup completed successfully at ${new Date().toLocaleTimeString()}.`;
-                logToRenderer('SUCCESS', `Job ${jobId}: ${finalMessage}`);
+                console.log(`[SUCCESS] Job ${jobId}: ${finalMessage}`);
             } else {
                 finalStatus = 'DoneWithErrors';
                 finalMessage = `Backup complete, but auto-cleanup failed: ${cleanupResult.error}`;
-                logToRenderer('WARN', `Job ${jobId}: ${finalMessage}`);
+                console.warn(`[WARN] Job ${jobId}: ${finalMessage}`);
             }
             sendUpdate(finalStatus, 100, finalMessage, payload);
         } else {
@@ -584,14 +571,14 @@ ipcMain.on('job:start', async (event, jobId) => {
                     : `Backup completed successfully at ${new Date().toLocaleTimeString()}.`;
             }
             sendUpdate(finalStatus, 100, finalMessage, payload);
-            logToRenderer(finalStatus === 'Done' ? 'SUCCESS' : 'WARN', `Job ${jobId}: ${finalMessage}`);
+            console.log(finalStatus === 'Done' ? `[SUCCESS] Job ${jobId}: ${finalMessage}` : `[WARN] Job ${jobId}: ${finalMessage}`);
         }
 
     } catch(err) {
-        logToRenderer('ERROR', `A critical error occurred in job ${jobId}: ${err.message}\n${err.stack}`);
+        console.error(`[ERROR] A critical error occurred in job ${jobId}: ${err.message}\n${err.stack}`);
         const toDelete = calculateOrphans(sourcePaths, destIndex, completedDirs);
         if (toDelete.length > 0) {
-            logToRenderer('INFO', `Job ${jobId}: Found ${toDelete.length} orphan items that can be cleaned up despite the error.`);
+            console.log(`[INFO] Job ${jobId}: Found ${toDelete.length} orphan items that can be cleaned up despite the error.`);
         }
         sendUpdate('Error', 0, `A critical error occurred: ${err.message}`, { filesToDelete: toDelete });
     } finally {
@@ -601,9 +588,9 @@ ipcMain.on('job:start', async (event, jobId) => {
                 const newIndexData = { destinationPath: job.destination, files: destIndex };
                 await fs.writeFile(tempIndexFilePath, JSON.stringify(newIndexData));
                 await fs.rename(tempIndexFilePath, indexFilePath);
-                logToRenderer('INFO', `Job ${jobId}: Destination index saved.`);
+                console.log(`[INFO] Job ${jobId}: Destination index saved.`);
             } catch (e) {
-                logToRenderer('ERROR', `Job ${jobId}: Failed to save destination index on exit: ${e.message}`);
+                console.error(`[ERROR] Job ${jobId}: Failed to save destination index on exit: ${e.message}`);
             }
         }
 
@@ -611,7 +598,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         stopFlags.delete(jobId); // Ensure stop flag is always cleared on exit
         if (runningJobsInMain.size === 0 && powerSaveBlockerId) {
             powerSaveBlocker.stop(powerSaveBlockerId);
-            logToRenderer('INFO', 'System sleep prevention has been lifted.');
+            console.log('[INFO] System sleep prevention has been lifted.');
             powerSaveBlockerId = null;
         }
     }
@@ -632,17 +619,17 @@ ipcMain.on('job:cleanup', async (event, { jobId, files }) => {
 });
 
 ipcMain.on('system:shutdown', () => {
-    logToRenderer('WARN', 'Shutdown command received. Shutting down the system.');
+    console.warn('[WARN] Shutdown command received. Shutting down the system.');
     const command = process.platform === 'win32' ? 'shutdown /s /t 0' : 'shutdown -h now';
     exec(command, (error, stdout, stderr) => {
         if (error) {
-            logToRenderer('ERROR', `Shutdown failed: ${error.message}`);
+            console.error(`[ERROR] Shutdown failed: ${error.message}`);
             return;
         }
         if (stderr) {
-            logToRenderer('ERROR', `Shutdown stderr: ${stderr}`);
+            console.error(`[ERROR] Shutdown stderr: ${stderr}`);
             return;
         }
-        logToRenderer('INFO', `Shutdown stdout: ${stdout}`);
+        console.log(`[INFO] Shutdown stdout: ${stdout}`);
     });
 });

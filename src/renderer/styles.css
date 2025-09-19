@@ -181,9 +181,10 @@ input:checked + .slider:before { transform: translateX(20px); }
 .job-drag-handle { display: flex; align-items: center; justify-content: center; padding: 0 var(--spacing-md); color: var(--text-tertiary); flex-shrink: 0; transition: var(--transition-fast); border-right: 1px solid var(--border-primary); }
 .job-item:hover .job-drag-handle { color: var(--text-secondary); background: var(--border-secondary); }
 .job-content { flex-grow: 1; padding: var(--spacing-md) var(--spacing-lg); display: flex; flex-direction: column; gap: var(--spacing-md); min-width: 0; }
-.job-header { display: flex; justify-content: space-between; align-items: center; }
-.job-name { margin: 0; font-size: 1.2rem; color: var(--text-primary); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job-header { display: flex; justify-content: space-between; align-items: center; gap: var(--spacing-md); }
+.job-name { margin: 0; font-size: 1.2rem; color: var(--text-primary); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-grow: 1; }
 .job-name i { font-size: 0.8em; color: var(--text-tertiary); margin-left: var(--spacing-sm); vertical-align: middle; }
+.job-actions { display: flex; gap: var(--spacing-sm); flex-shrink: 0; align-items: center; }
 
 /* Paths Display */
 .job-paths-container { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-md); }
@@ -201,11 +202,6 @@ input:checked + .slider:before { transform: translateX(20px); }
   margin-top: auto;
   padding-top: var(--spacing-md);
   border-top: 1px solid var(--border-primary);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--spacing-md);
-  flex-wrap: nowrap;
 }
 .job-status-container { flex-grow: 1; min-width: 0; }
 .job-status {
@@ -218,7 +214,6 @@ input:checked + .slider:before { transform: translateX(20px); }
   flex-wrap: nowrap;
   gap: var(--spacing-md);
   overflow: hidden;
-  /* More robustly enforce a fixed height to prevent resizing from content changes */
   height: 1.5rem;
   min-height: 1.5rem;
   max-height: 1.5rem;
@@ -250,7 +245,6 @@ input:checked + .slider:before { transform: translateX(20px); }
 .job-item.is-done .progress-bar { background-color: var(--accent-success); }
 .job-item.is-error .progress-bar { background-color: var(--accent-danger); }
 
-.job-actions { display: flex; gap: var(--spacing-sm); flex-shrink: 0; align-items: center; }
 .job-actions-divider { width: 1px; height: 20px; background-color: var(--border-primary); margin: 0 4px; }
 .btn-icon {
   background: transparent; border: none; width: 32px; height: 32px; border-radius: 50%; color: var(--text-tertiary);
@@ -391,9 +385,9 @@ input[type="text"]:focus {
 .btn-icon-sm { font-size: 0.8em; }
 
 
-/* --- Log & Error Viewer Modals --- */
-.modal-log-viewer { max-width: 90vw; height: 80vh; padding: 0; }
-.log-header {
+/* --- Error Viewer Modal --- */
+.modal-errors-viewer { max-width: 90vw; height: 80vh; padding: 0; }
+.errors-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -403,8 +397,8 @@ input[type="text"]:focus {
   flex-wrap: wrap;
   gap: var(--spacing-md);
 }
-.log-header h2 { margin: 0; font-size: 1.2rem; display: flex; align-items: center; gap: 10px; }
-.log-controls {
+.errors-header h2 { margin: 0; font-size: 1.2rem; display: flex; align-items: center; gap: 10px; }
+.errors-controls {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -412,9 +406,8 @@ input[type="text"]:focus {
   justify-content: flex-end;
   flex-grow: 1;
 }
-.log-controls .toggle-label { font-size: 0.85rem; }
-#log-search-input, #errors-search-input { width: 250px; }
-#log-list-container, #errors-list-container {
+#errors-search-input { width: 250px; }
+#errors-list-container {
   flex-grow: 1; overflow-y: auto; padding: var(--spacing-md) var(--spacing-lg);
   background: var(--bg-tertiary);
 }
@@ -422,16 +415,7 @@ input[type="text"]:focus {
   display: flex; justify-content: center; align-items: center; height: 100%;
   color: var(--text-tertiary); font-family: var(--font-family); font-size: 1rem;
 }
-.log-entry { display: flex; align-items: baseline; gap: 12px; line-height: 1.6; font-family: var(--font-monospace); font-size: 0.85rem; }
-.log-timestamp { color: var(--text-tertiary); }
-.log-level { font-weight: bold; min-width: 60px; }
-.log-info { color: var(--accent-info); }
-.log-success { color: var(--accent-success); }
-.log-warn { color: var(--accent-warning); }
-.log-error { color: var(--accent-danger); }
-.log-message { color: var(--text-secondary); word-break: break-word; }
 
-/* Error Panel Specifics */
 #errors-list-container { font-family: var(--font-family); }
 .error-entry {
   padding: var(--spacing-sm) var(--spacing-md);
@@ -547,9 +531,8 @@ input[type="text"]:focus {
     transform: rotate(90deg);
     margin: var(--spacing-sm) 0;
   }
-  .job-footer {
+  .job-header {
     flex-wrap: wrap;
-    justify-content: center;
   }
   #app-header {
     justify-content: center;
