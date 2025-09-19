@@ -5,6 +5,7 @@ const WindowState = require('electron-window-state');
 const Store = require('electron-store');
 
 const store = new Store();
+let isLoggingEnabled = store.get('settings', { autoCleanup: false, loggingEnabled: true }).loggingEnabled;
 
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -19,6 +20,15 @@ if (!gotTheLock) {
 }
 
 let mainWindow;
+
+function logToRenderer(level, message) {
+    if (!isLoggingEnabled) return;
+    if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('log:message', { level, message });
+    }
+    const levelMap = { INFO: 'log', WARN: 'warn', ERROR: 'error', SUCCESS: 'log' };
+    (console[levelMap[level]] || console.log)(`[${level}] ${message}`);
+}
 
 function createWindow() {
   const mainWindowState = WindowState({
@@ -46,6 +56,10 @@ function createWindow() {
   mainWindowState.manage(mainWindow);
   Menu.setApplicationMenu(null);
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    logToRenderer('INFO', 'Application successfully started.');
+  });
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
     const isCtrlOrCmd = process.platform === 'darwin' ? input.meta : input.control;
@@ -83,12 +97,14 @@ ipcMain.handle('dialog:saveJson', async (event, content) => {
     if (!canceled && filePath) {
         try {
             await fs.writeFile(filePath, content);
+            logToRenderer('SUCCESS', `Successfully exported jobs to ${filePath}`);
             return { success: true };
         } catch (error) {
-            console.error('Failed to save file:', error);
+            logToRenderer('ERROR', `Failed to save file: ${error.message}`);
             return { success: false, error: error.message };
         }
     }
+    logToRenderer('INFO', 'Job export was canceled by user.');
     return { success: false, error: 'Save dialog canceled.' };
 });
 
@@ -101,19 +117,26 @@ ipcMain.handle('dialog:openJson', async () => {
     if (!canceled && filePaths.length > 0) {
         try {
             const content = await fs.readFile(filePaths[0], 'utf-8');
+            logToRenderer('INFO', `Reading jobs for import from ${filePaths[0]}`);
             return { success: true, content };
         } catch (error) {
-            console.error('Failed to read file:', error);
+            logToRenderer('ERROR', `Failed to read file for import: ${error.message}`);
             return { success: false, error: error.message };
         }
     }
+    logToRenderer('INFO', 'Job import was canceled by user.');
     return { success: false, error: 'Open dialog canceled.' };
 });
 
 ipcMain.handle('jobs:get', () => store.get('jobs', []));
 ipcMain.handle('jobs:set', (event, jobs) => store.set('jobs', jobs));
-ipcMain.handle('settings:get', () => store.get('settings', { autoCleanup: false }));
-ipcMain.handle('settings:set', (event, settings) => store.set('settings', settings));
+ipcMain.handle('settings:get', () => store.get('settings', { autoCleanup: false, loggingEnabled: true }));
+ipcMain.handle('settings:set', (event, settings) => {
+    if (typeof settings.loggingEnabled !== 'undefined') {
+        isLoggingEnabled = settings.loggingEnabled;
+    }
+    store.set('settings', settings);
+});
 
 // Backup Logic
 async function getFileSystemEntries(dir) {
@@ -131,7 +154,9 @@ async function getFileSystemEntries(dir) {
             }
         }
     } catch (error) {
-        if (error.code !== 'ENOENT') console.error(`Error reading directory ${dir}:`, error);
+        if (error.code !== 'ENOENT') {
+            logToRenderer('ERROR', `Error reading directory ${dir}: ${error.message}`);
+        }
     }
     return entries;
 }
@@ -140,21 +165,23 @@ async function performCleanup(job, files) {
     if (!job || !files || files.length === 0) {
         return { success: false, error: "Job or files not found." };
     }
+    logToRenderer('INFO', `Starting cleanup for job ${job.id}. Deleting ${files.length} items.`);
     try {
         const filesToDelete = files.filter(item => item.type === 'file').map(item => item.path);
         const dirsToDelete = files.filter(item => item.type === 'dir').map(item => item.path);
 
         for (const relativePath of filesToDelete) {
-            await fs.unlink(path.join(job.destination, relativePath)).catch(err => console.error(`Failed to delete file ${relativePath}:`, err));
+            await fs.unlink(path.join(job.destination, relativePath)).catch(err => logToRenderer('ERROR', `Failed to delete file ${relativePath}: ${err.message}`));
         }
 
         dirsToDelete.sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
         for (const relativePath of dirsToDelete) {
-            await fs.rmdir(path.join(job.destination, relativePath)).catch(err => console.error(`Failed to delete directory ${relativePath}:`, err));
+            await fs.rmdir(path.join(job.destination, relativePath)).catch(err => logToRenderer('ERROR', `Failed to delete directory ${relativePath}: ${err.message}`));
         }
+        logToRenderer('SUCCESS', `Cleanup for job ${job.id} completed.`);
         return { success: true };
     } catch (error) {
-        console.error(`Error during cleanup for job ${job.id}:`, error);
+        logToRenderer('ERROR', `Error during cleanup for job ${job.id}: ${error.message}`);
         return { success: false, error: error.message };
     }
 }
@@ -164,6 +191,7 @@ ipcMain.on('job:start', async (event, jobId) => {
     const job = jobs.find(j => j.id === jobId);
     if (!job) return;
 
+    logToRenderer('INFO', `Job ${jobId} started.`);
     const sendUpdate = (status, progress = 0, message = '', payload = {}) => {
         mainWindow.webContents.send('job:update', { jobId, status, progress, message, payload });
     };
@@ -173,11 +201,13 @@ ipcMain.on('job:start', async (event, jobId) => {
         await fs.access(job.destination);
     } catch (err) {
         sendUpdate('Error', 0, `Path not found: ${err.path}`);
+        logToRenderer('ERROR', `Job ${jobId} failed: Path not found: ${err.path}`);
         return;
     }
 
     sendUpdate('Scanning', 0, 'Scanning source and destination folders...');
     const [sourceEntries, destEntries] = await Promise.all([getFileSystemEntries(job.source), getFileSystemEntries(job.destination)]);
+    logToRenderer('INFO', `Job ${jobId}: Found ${sourceEntries.size} source items and ${destEntries.size} destination items.`);
 
     sendUpdate('Copying', 0, 'Creating directory structure...');
     const toCreateDirs = [];
@@ -189,7 +219,9 @@ ipcMain.on('job:start', async (event, jobId) => {
     toCreateDirs.sort((a, b) => a.split(path.sep).length - b.split(path.sep).length);
     for (const relativePath of toCreateDirs) {
         await fs.mkdir(path.join(job.destination, relativePath), { recursive: true }).catch(error => {
-            sendUpdate('Error', 0, `Failed to create directory: ${relativePath}. ${error.message}`);
+            const errorMessage = `Failed to create directory: ${relativePath}. ${error.message}`;
+            sendUpdate('Error', 0, errorMessage);
+            logToRenderer('ERROR', `Job ${jobId}: ${errorMessage}`);
             return;
         });
     }
@@ -205,6 +237,7 @@ ipcMain.on('job:start', async (event, jobId) => {
             }
         }
     }
+    logToRenderer('INFO', `Job ${jobId}: Found ${toCopy.length} files to copy.`);
 
     let copiedSize = 0;
     for (let i = 0; i < toCopy.length; i++) {
@@ -216,7 +249,9 @@ ipcMain.on('job:start', async (event, jobId) => {
             await fs.copyFile(path.join(job.source, relativePath), destPath);
             copiedSize += sourceEntries.get(relativePath).size;
         } catch (error) {
-            sendUpdate('Error', 0, `Failed to copy: ${relativePath}. ${error.message}`);
+            const errorMessage = `Failed to copy: ${relativePath}. ${error.message}`;
+            sendUpdate('Error', 0, errorMessage);
+            logToRenderer('ERROR', `Job ${jobId}: ${errorMessage}`);
             return;
         }
     }
@@ -228,6 +263,7 @@ ipcMain.on('job:start', async (event, jobId) => {
             toDelete.push({ path: relativePath, type: destEntry.type });
         }
     }
+    logToRenderer('INFO', `Job ${jobId}: Found ${toDelete.length} items to delete from destination.`);
 
     const settings = store.get('settings', { autoCleanup: false });
     if (settings.autoCleanup && toDelete.length > 0) {
@@ -237,11 +273,13 @@ ipcMain.on('job:start', async (event, jobId) => {
             ? `Backup and cleanup completed successfully at ${new Date().toLocaleTimeString()}.`
             : `Backup complete, but auto-cleanup failed: ${cleanupResult.error}`;
         sendUpdate('Done', 100, finalMessage);
+        logToRenderer(cleanupResult.success ? 'SUCCESS' : 'WARN', `Job ${jobId}: ${finalMessage}`);
     } else {
         const finalMessage = toDelete.length > 0
             ? `Backup complete. ${toDelete.length} item(s) pending cleanup.`
             : `Backup completed successfully at ${new Date().toLocaleTimeString()}.`;
         sendUpdate('Done', 100, finalMessage, { filesToDelete: toDelete });
+        logToRenderer('SUCCESS', `Job ${jobId}: ${finalMessage}`);
     }
 });
 

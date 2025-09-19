@@ -14,6 +14,10 @@
     <header id="app-header">
       <h1><i class="fa-solid fa-shield-heart"></i> Rosemother</h1>
       <div id="header-actions">
+        <button id="log-btn" class="btn-secondary" aria-label="Show Logs">
+          <i class="fa-solid fa-file-lines"></i> Logs
+        </button>
+        <div class="action-separator"></div>
         <button id="start-all-btn" class="btn-secondary" aria-label="Start All Jobs">
           <i class="fa-solid fa-play-circle"></i> Start All
         </button>
@@ -92,6 +96,30 @@
       </div>
     </div>
   </div>
+
+  <!-- Log Viewer Modal -->
+  <div id="log-modal" class="modal-overlay hidden">
+    <div class="modal-content modal-log-viewer">
+      <div class="log-header">
+        <h2><i class="fa-solid fa-file-waveform"></i> Application Logs</h2>
+        <div class="log-controls">
+          <input type="text" id="log-search-input" placeholder="Search logs..." />
+          <div class="toggle-switch-container">
+            <label for="logging-enabled-toggle" class="toggle-label">Enable Logging</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="logging-enabled-toggle">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <button id="copy-log-btn" class="btn-secondary"><i class="fa-solid fa-copy"></i> Copy</button>
+          <button id="clear-log-btn" class="btn-danger"><i class="fa-solid fa-trash-can"></i> Clear</button>
+          <button id="close-log-btn" class="btn-secondary"><i class="fa-solid fa-times"></i></button>
+        </div>
+      </div>
+      <div id="log-list-container"></div>
+    </div>
+  </div>
+
 
   <script src="renderer.js"></script>
 </body>
