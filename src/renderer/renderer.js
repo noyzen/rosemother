@@ -718,10 +718,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const { jobId, status, progress, message, payload } = data;
     const jobEl = document.querySelector(`.job-item[data-id="${jobId}"]`);
     if (!jobEl) return;
-    
-    if (payload && payload.errorType === 'PATH_ERROR') {
-      showConfirm('Job Error', message, 'info');
-    }
 
     const statusText = jobEl.querySelector('.status-text');
     const statusEta = jobEl.querySelector('.status-eta');
