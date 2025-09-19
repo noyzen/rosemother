@@ -352,73 +352,59 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
 
         const copyErrors = [];
-        let needsIndexBuild = false;
 
-        sendUpdate('Scanning', -1, 'Loading destination index...');
+        // --- Start of Change: Always rebuild destination index for reliability ---
+        // This fixes a critical bug where files deleted from the destination were not
+        // re-copied because the app was trusting a stale, cached index.
+        destIndex = {};
+        sendUpdate('Scanning', -1, 'Scanning destination for changes...');
+        let totalFileCount = 0;
         try {
-            const indexData = await fs.readFile(indexFilePath, 'utf-8');
-            const parsedIndex = JSON.parse(indexData);
-            if (parsedIndex.destinationPath !== job.destination) {
-                console.warn(`[WARN] Job ${jobId}: Destination path has changed. Rebuilding index.`);
-                needsIndexBuild = true;
-            } else {
-                destIndex = parsedIndex.files || {};
+            console.log(`[INFO] Job ${jobId}: Starting to count destination files at ${job.destination}.`);
+            totalFileCount = await countFiles(job.destination, jobId);
+            if (stopFlags.has(jobId)) { throw new Error('COUNT_STOPPED'); } // Re-check after long operation
+            console.log(`[INFO] Job ${jobId}: Finished counting. Found approx ${totalFileCount.toLocaleString()} files in destination.`);
+        } catch (err) {
+            if (err.message === 'COUNT_STOPPED') {
+                console.warn(`[WARN] Job ${jobId}: Stop requested during destination file count.`);
+                sendUpdate('Stopped', 0, 'Job stopped by user.');
+                return;
             }
-        } catch (e) {
-            console.warn(`[WARN] Job ${jobId}: Destination index not found or corrupted. A new one will be built.`);
-            needsIndexBuild = true;
+            console.warn(`[WARN] Job ${jobId}: Could not count dest files. Progress indeterminate. Error: ${err.message}`);
         }
 
-        if (needsIndexBuild) {
-            destIndex = {};
-            sendUpdate('Scanning', -1, 'Counting destination files...');
-            let totalFileCount = 0;
-            try {
-                console.log(`[INFO] Job ${jobId}: Starting to count destination files at ${job.destination}.`);
-                totalFileCount = await countFiles(job.destination, jobId);
-                if (stopFlags.has(jobId)) { throw new Error('COUNT_STOPPED'); } // Re-check after long operation
-                console.log(`[INFO] Job ${jobId}: Finished counting. Found approx ${totalFileCount.toLocaleString()} files in destination.`);
-            } catch (err) {
-                if (err.message === 'COUNT_STOPPED') {
-                    console.warn(`[WARN] Job ${jobId}: Stop requested during destination file count.`);
-                    sendUpdate('Stopped', 0, 'Job stopped by user.');
-                    return;
-                }
-                console.warn(`[WARN] Job ${jobId}: Could not count dest files. Progress indeterminate. Error: ${err.message}`);
-            }
+        if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
 
-            if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
+        let scannedFileCount = 0;
+        async function buildIndex(relativeDir) {
+            if (stopFlags.has(jobId)) return;
+            const dir = path.join(job.destination, relativeDir);
+            let dirents;
+            try { dirents = await fs.readdir(dir, { withFileTypes: true }); } catch (e) { return; }
 
-            let scannedFileCount = 0;
-            async function buildIndex(relativeDir) {
+            for (const dirent of dirents) {
                 if (stopFlags.has(jobId)) return;
-                const dir = path.join(job.destination, relativeDir);
-                let dirents;
-                try { dirents = await fs.readdir(dir, { withFileTypes: true }); } catch (e) { return; }
+                const relativePath = path.join(relativeDir, dirent.name);
+                const fullPath = path.join(dir, dirent.name);
+                if (dirent.isDirectory()) {
+                    await buildIndex(relativePath);
+                } else if (dirent.isFile()) {
+                    scannedFileCount++;
+                    const progress = totalFileCount > 0 ? Math.min((scannedFileCount / totalFileCount) * 100, 100) : -1;
+                    const message = totalFileCount > 0 ? `Scanning destination: ${scannedFileCount.toLocaleString()} of ${totalFileCount.toLocaleString()}` : `Scanning destination: ${scannedFileCount.toLocaleString()} files...`;
+                    sendUpdate('Scanning', progress, message);
 
-                for (const dirent of dirents) {
-                    if (stopFlags.has(jobId)) return;
-                    const relativePath = path.join(relativeDir, dirent.name);
-                    const fullPath = path.join(dir, dirent.name);
-                    if (dirent.isDirectory()) {
-                        await buildIndex(relativePath);
-                    } else if (dirent.isFile()) {
-                        scannedFileCount++;
-                        const progress = totalFileCount > 0 ? Math.min((scannedFileCount / totalFileCount) * 100, 100) : -1;
-                        const message = totalFileCount > 0 ? `Scanning: ${scannedFileCount.toLocaleString()} of ${totalFileCount.toLocaleString()}` : `Scanning destination: ${scannedFileCount.toLocaleString()} files...`;
-                        sendUpdate('Scanning', progress, message);
-
-                        try {
-                            const stats = await fs.stat(fullPath);
-                            destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs };
-                            scheduleSave();
-                        } catch (err) { console.warn(`[WARN] Job ${jobId}: Could not scan ${relativePath}: ${err.message}`); }
-                    }
+                    try {
+                        const stats = await fs.stat(fullPath);
+                        destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs };
+                        scheduleSave();
+                    } catch (err) { console.warn(`[WARN] Job ${jobId}: Could not scan ${relativePath}: ${err.message}`); }
                 }
             }
-            await buildIndex('');
-            if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
         }
+        await buildIndex('');
+        if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
+        // --- End of Change ---
 
         sendUpdate('Scanning', -1, 'Counting source files...');
         let totalSourceFiles = 0;
