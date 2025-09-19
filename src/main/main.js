@@ -1,6 +1,7 @@
 
 
 
+
 const { app, BrowserWindow, Menu, ipcMain, dialog, powerSaveBlocker } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
@@ -263,8 +264,8 @@ ipcMain.on('job:start', async (event, jobId) => {
 
         if (needsIndexBuild) {
             destIndex = {}; // Clear old data if rebuilding
-            let indexedFileCount = 0;
-            async function buildIndex(relativeDir) {
+            let scannedFileCount = 0;
+            async function buildFastIndex(relativeDir) {
                 if (stopFlags.has(jobId)) return;
                 const dir = path.join(job.destination, relativeDir);
                 let dirents;
@@ -275,32 +276,32 @@ ipcMain.on('job:start', async (event, jobId) => {
                     
                     const relativePath = path.join(relativeDir, dirent.name);
                     if (dirent.isDirectory()) {
-                        await buildIndex(relativePath);
+                        await buildFastIndex(relativePath);
                     } else if (dirent.isFile()) {
-                        indexedFileCount++;
-                        sendUpdate('Copying', -1, `Building index: ${indexedFileCount.toLocaleString()} files...`);
+                        scannedFileCount++;
+                        sendUpdate('Copying', -1, `Scanning destination: ${scannedFileCount.toLocaleString()} files...`);
                         const fullPath = path.join(dir, dirent.name);
                         try {
                             const stats = await fs.stat(fullPath);
-                            const hash = await calculateFileHash(fullPath, jobId);
-                            if (hash) {
-                                destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs, hash };
-                            }
-                        } catch (err) { logToRenderer('WARN', `Job ${jobId}: Could not build index for ${relativePath}: ${err.message}`); }
+                            // Store only metadata. Hash will be added on-demand.
+                            destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs };
+                        } catch (err) { logToRenderer('WARN', `Job ${jobId}: Could not scan ${relativePath}: ${err.message}`); }
                     }
                 }
             }
-            logToRenderer('INFO', `Job ${jobId}: Starting destination index build.`);
-            await buildIndex('');
+            logToRenderer('INFO', `Job ${jobId}: Starting fast destination scan.`);
+            await buildFastIndex('');
             if (stopFlags.has(jobId)) {
-                logToRenderer('WARN', `Job ${jobId} was stopped during index build.`);
+                logToRenderer('WARN', `Job ${jobId} was stopped during destination scan.`);
                 sendUpdate('Stopped', 0, 'Job stopped by user.');
                 return;
             }
         }
         
         const hashToPathMap = Object.entries(destIndex).reduce((acc, [path, meta]) => {
-            acc[meta.hash] = path;
+            if (meta.hash) {
+                acc[meta.hash] = path;
+            }
             return acc;
         }, {});
 
@@ -331,28 +332,35 @@ ipcMain.on('job:start', async (event, jobId) => {
                         const sourceStats = await fs.stat(sourcePath);
                         const destEntry = destIndex[relativePath];
 
+                        // Optimization: Skip hashing if file metadata is identical.
                         if (destEntry && destEntry.size === sourceStats.size && destEntry.mtimeMs === sourceStats.mtimeMs) {
-                            continue; // Unchanged, skip hashing and copy.
+                            continue;
                         }
 
+                        // Hashing is required now to determine the next step.
                         const sourceHash = await calculateFileHash(sourcePath, jobId);
-                        if (!sourceHash) continue; // Stopped or error
+                        if (!sourceHash) continue; // Stopped or error during hashing
 
+                        // Skip if content hash is identical (metadata changed, but content didn't).
                         if (destEntry && destEntry.hash === sourceHash) {
-                            continue; // Content is the same, skip.
+                            continue;
                         }
 
+                        // Check if this content exists elsewhere (a move/rename).
                         const movedPath = hashToPathMap[sourceHash];
                         if (movedPath && movedPath !== relativePath) {
                             sendUpdate('Copying', -1, `Moving: ${movedPath} -> ${relativePath}`);
                             const oldFullPath = path.join(job.destination, movedPath);
                             await fs.rename(oldFullPath, destPath);
-                            delete destIndex[movedPath];
+                            delete destIndex[movedPath]; // Remove old index entry
                             logToRenderer('INFO', `Job ${jobId}: Detected move for ${relativePath}`);
                         } else {
+                            // This is a new or truly modified file, so copy it.
                             sendUpdate('Copying', -1, `Copying: ${relativePath}`);
                             await fs.copyFile(sourcePath, destPath);
                         }
+
+                        // Update timestamps and the index with the new hash.
                         await fs.utimes(destPath, new Date(sourceStats.mtimeMs), new Date(sourceStats.mtimeMs));
                         destIndex[relativePath] = { size: sourceStats.size, mtimeMs: sourceStats.mtimeMs, hash: sourceHash };
                         hashToPathMap[sourceHash] = relativePath;
