@@ -181,8 +181,8 @@ async function countFiles(startPath, jobId, job = null) {
     let fileCount = 0;
     let dirCount = 0;
     const queue = [startPath];
-    const LOG_INTERVAL = 500; // Log every 500 directories
-
+    const YIELD_THRESHOLD = 500; // Yield to event loop every 500 directories processed
+    
     while (queue.length > 0) {
         if (stopFlags.has(jobId)) {
             console.warn(`[WARN] Job ${jobId}: countFiles received stop signal.`);
@@ -190,10 +190,9 @@ async function countFiles(startPath, jobId, job = null) {
         }
         const currentPath = queue.shift();
 
-        // Periodically log progress
         dirCount++;
-        if (dirCount % LOG_INTERVAL === 0) {
-            console.log(`[INFO] Job ${jobId}: countFiles progress - Dirs processed: ${dirCount}, Queue size: ${queue.length}. Next to process: ${currentPath}`);
+        if (dirCount % YIELD_THRESHOLD === 0) {
+             await new Promise(resolve => setImmediate(resolve));
         }
 
         let dirents;
@@ -328,6 +327,7 @@ ipcMain.on('job:start', async (event, jobId) => {
     
     const sourcePaths = new Set();
     const completedDirs = new Set();
+    const YIELD_THRESHOLD = 500; // General threshold for yielding to event loop
 
     try {
         if (runningJobsInMain.size === 1) { // Only when the first job starts
@@ -390,6 +390,9 @@ ipcMain.on('job:start', async (event, jobId) => {
                     await buildIndex(relativePath);
                 } else if (dirent.isFile()) {
                     scannedFileCount++;
+                    if (scannedFileCount % YIELD_THRESHOLD === 0) {
+                        await new Promise(resolve => setImmediate(resolve));
+                    }
                     const progress = totalFileCount > 0 ? Math.min((scannedFileCount / totalFileCount) * 100, 100) : -1;
                     const message = totalFileCount > 0 ? `Scanning destination: ${scannedFileCount.toLocaleString()} of ${totalFileCount.toLocaleString()}` : `Scanning destination: ${scannedFileCount.toLocaleString()} files...`;
                     sendUpdate('Scanning', progress, message);
@@ -434,6 +437,12 @@ ipcMain.on('job:start', async (event, jobId) => {
 
             for (const dirent of dirents) {
                 if (stopFlags.has(jobId)) return;
+                
+                processedFiles++;
+                if (processedFiles % YIELD_THRESHOLD === 0) {
+                    await new Promise(resolve => setImmediate(resolve));
+                }
+
                 const relativePath = path.join(relativeDir, dirent.name);
                 sourcePaths.add(relativePath);
 
@@ -450,7 +459,6 @@ ipcMain.on('job:start', async (event, jobId) => {
                     await fs.mkdir(destPath, { recursive: true }).catch(() => {});
                     await syncDirectory(relativePath);
                 } else if (dirent.isFile()) {
-                    processedFiles++;
                     const progress = totalSourceFiles > 0 ? (processedFiles / totalSourceFiles) * 100 : -1;
                     const copyPayload = { processedFiles, totalSourceFiles, errorCount: copyErrors.length };
                     

@@ -176,6 +176,13 @@ document.addEventListener('DOMContentLoaded', () => {
             statusText = 'Queued...';
         }
         
+        let statusIcon = '';
+        if (isThisJobActive) {
+            statusIcon = '<span class="job-status-icon"><i class="fa-solid fa-spinner fa-spin"></i></span>';
+        } else if (isQueued) {
+            statusIcon = '<span class="job-status-icon"><i class="fa-solid fa-clock"></i></span>';
+        }
+
         const jobEl = document.createElement('div');
         jobEl.className = 'job-item';
         jobEl.dataset.id = job.id;
@@ -194,7 +201,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="job-drag-handle" title="${isAnyOperationActive ? 'Cannot reorder while a job is running' : 'Drag to reorder'}"><i class="fa-solid fa-grip-vertical"></i></div>
             <div class="job-content">
                 <div class="job-header">
-                    <h3 class="job-name">${job.name || 'Untitled Job'}</h3>
+                    <h3 class="job-name">${statusIcon}${job.name || 'Untitled Job'}</h3>
                     <div class="job-actions">
                         <button class="btn btn-sm btn-warning btn-view-errors ${hasPersistedErrors && !isThisJobActive ? '' : 'hidden'}" title="View Errors"><i class="fa-solid fa-triangle-exclamation"></i> Errors${hasPersistedErrors ? ` (${errorCount})` : ''}</button>
                         <button class="btn btn-sm btn-warning btn-cleanup ${hasPendingCleanup ? '' : 'hidden'}" title="Cleanup Files" ${isAnyOperationActive ? 'disabled' : ''}><i class="fa-solid fa-broom"></i> Cleanup</button>
