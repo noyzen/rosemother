@@ -173,8 +173,31 @@ async function calculateFileHash(filePath, jobId) {
     });
 }
 
-// Helper to count files iteratively to avoid stack overflows.
-async function countFiles(startPath, jobId) {
+function isExcluded(relativePath, jobExclusions) {
+    if (!jobExclusions || !jobExclusions.enabled) return false;
+
+    const lowerCaseRelativePath = relativePath.toLowerCase();
+    const pathParts = lowerCaseRelativePath.split(path.sep);
+
+    // Check excluded paths/names (case-insensitive)
+    if (jobExclusions.paths && jobExclusions.paths.length > 0) {
+        const lowerCaseExcludedPaths = jobExclusions.paths.map(p => p.toLowerCase());
+        for (const part of pathParts) {
+            if (lowerCaseExcludedPaths.includes(part)) return true;
+        }
+    }
+
+    // Check excluded extensions (case-insensitive)
+    if (jobExclusions.extensions && jobExclusions.extensions.length > 0) {
+        const lowerCaseExcludedExts = jobExclusions.extensions.map(e => e.toLowerCase().startsWith('.') ? e.toLowerCase() : `.${e.toLowerCase()}`);
+        const ext = path.extname(lowerCaseRelativePath).toLowerCase();
+        if (ext && lowerCaseExcludedExts.includes(ext)) return true;
+    }
+
+    return false;
+}
+
+async function countFiles(startPath, jobId, job = null) {
     let fileCount = 0;
     const queue = [startPath];
 
@@ -187,12 +210,17 @@ async function countFiles(startPath, jobId) {
         try {
             dirents = await fs.readdir(currentPath, { withFileTypes: true });
         } catch (e) {
-            // Ignore directories we can't read (e.g., permissions error)
             continue;
         }
 
         for (const dirent of dirents) {
             const fullPath = path.join(currentPath, dirent.name);
+            const relativePath = path.relative(startPath, fullPath);
+
+            if (job && job.exclusions && isExcluded(relativePath, job.exclusions)) {
+                continue;
+            }
+
             if (dirent.isDirectory()) {
                 queue.push(fullPath);
             } else if (dirent.isFile()) {
@@ -255,7 +283,6 @@ ipcMain.on('job:start', async (event, jobId) => {
     const settings = store.get('settings', { loggingEnabled: true, preventSleep: false, autoCleanup: false });
     const sendUpdate = (status, progress, message, payload) => sendUpdateForJob(jobId, status, progress, message, payload);
 
-    // Store indexes in the app's user data directory for safety and persistence.
     const indexesPath = path.join(app.getPath('userData'), 'job_indexes');
     await fs.mkdir(indexesPath, { recursive: true });
     const indexFilePath = path.join(indexesPath, `${job.id}.json`);
@@ -263,26 +290,21 @@ ipcMain.on('job:start', async (event, jobId) => {
 
     let destIndex = {};
     
-    // --- Throttled Saving Logic ---
     let saveTimeout = null;
     const SAVE_INTERVAL = 3000;
     const scheduleSave = () => {
-        if (saveTimeout) return; // A save is already scheduled
+        if (saveTimeout) return;
         saveTimeout = setTimeout(async () => {
-            saveTimeout = null; // Clear lock so a new save can be scheduled
+            saveTimeout = null;
             if (stopFlags.has(jobId)) return;
             try {
-                const indexToSave = {
-                    destinationPath: job.destination,
-                    files: destIndex,
-                };
+                const indexToSave = { destinationPath: job.destination, files: destIndex };
                 await fs.writeFile(tempIndexFilePath, JSON.stringify(indexToSave));
             } catch (e) {
                 logToRenderer('WARN', `Job ${jobId}: Periodic index save failed: ${e.message}`);
             }
         }, SAVE_INTERVAL);
     };
-    // --- End Throttled Saving ---
 
     try {
         const allErrors = store.get('jobErrors', {});
@@ -330,29 +352,18 @@ ipcMain.on('job:start', async (event, jobId) => {
         }
 
         if (needsIndexBuild) {
-            destIndex = {}; // Clear old data if rebuilding
-            
-            // Pre-scan to count files for progress reporting
+            destIndex = {};
             sendUpdate('Scanning', -1, 'Counting destination files...');
             let totalFileCount = 0;
             try {
-                logToRenderer('INFO', `Job ${jobId}: Starting file count for destination at ${job.destination}.`);
                 totalFileCount = await countFiles(job.destination, jobId);
-                logToRenderer('INFO', `Job ${jobId}: Found approximately ${totalFileCount.toLocaleString()} files.`);
+                logToRenderer('INFO', `Job ${jobId}: Found approx ${totalFileCount.toLocaleString()} files in destination.`);
             } catch (err) {
-                if (err.message === 'COUNT_STOPPED') {
-                    logToRenderer('WARN', `Job ${jobId} was stopped during destination file count.`);
-                    sendUpdate('Stopped', 0, 'Job stopped by user.');
-                    return;
-                }
-                logToRenderer('WARN', `Job ${jobId}: Could not completely count files. Progress will be indeterminate. Error: ${err.message}`);
+                if (err.message === 'COUNT_STOPPED') { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
+                logToRenderer('WARN', `Job ${jobId}: Could not count dest files. Progress indeterminate. Error: ${err.message}`);
             }
 
-            if (stopFlags.has(jobId)) { // Re-check after async operation
-                logToRenderer('WARN', `Job ${jobId} was stopped by the user.`);
-                sendUpdate('Stopped', 0, 'Job stopped by user.');
-                return;
-            }
+            if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
 
             let scannedFileCount = 0;
             async function buildFastIndex(relativeDir) {
@@ -363,62 +374,42 @@ ipcMain.on('job:start', async (event, jobId) => {
 
                 for (const dirent of dirents) {
                     if (stopFlags.has(jobId)) return;
-                    
                     const relativePath = path.join(relativeDir, dirent.name);
                     if (dirent.isDirectory()) {
                         await buildFastIndex(relativePath);
                     } else if (dirent.isFile()) {
                         scannedFileCount++;
-                        
                         const progress = totalFileCount > 0 ? Math.min((scannedFileCount / totalFileCount) * 100, 100) : -1;
-                        const message = totalFileCount > 0
-                            ? `Scanning: ${scannedFileCount.toLocaleString()} of ${totalFileCount.toLocaleString()}`
-                            : `Scanning destination: ${scannedFileCount.toLocaleString()} files...`;
+                        const message = totalFileCount > 0 ? `Indexing: ${scannedFileCount.toLocaleString()} of ${totalFileCount.toLocaleString()}` : `Indexing destination: ${scannedFileCount.toLocaleString()} files...`;
                         sendUpdate('Scanning', progress, message);
 
-                        const fullPath = path.join(dir, dirent.name);
                         try {
-                            const stats = await fs.stat(fullPath);
-                            // Store only metadata. Hash will be added on-demand.
+                            const stats = await fs.stat(path.join(dir, dirent.name));
                             destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs };
                             scheduleSave();
                         } catch (err) { logToRenderer('WARN', `Job ${jobId}: Could not scan ${relativePath}: ${err.message}`); }
                     }
                 }
             }
-            logToRenderer('INFO', `Job ${jobId}: Starting fast destination scan.`);
             await buildFastIndex('');
-            if (stopFlags.has(jobId)) {
-                logToRenderer('WARN', `Job ${jobId} was stopped during destination scan.`);
-                sendUpdate('Stopped', 0, 'Job stopped by user.');
-                return;
-            }
+            if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
         }
         
         const hashToPathMap = Object.entries(destIndex).reduce((acc, [path, meta]) => {
-            if (meta.hash) {
-                acc[meta.hash] = path;
-            }
+            if (meta.hash) acc[meta.hash] = path;
             return acc;
         }, {});
 
         sendUpdate('Scanning', -1, 'Counting source files...');
         let totalSourceFiles = 0;
         try {
-            totalSourceFiles = await countFiles(job.source, jobId);
+            totalSourceFiles = await countFiles(job.source, jobId, job); // Pass job for exclusions
         } catch (err) {
-            if (err.message === 'COUNT_STOPPED') {
-                logToRenderer('WARN', `Job ${jobId} was stopped during source file count.`);
-                sendUpdate('Stopped', 0, 'Job stopped by user.');
-                return;
-            }
+            if (err.message === 'COUNT_STOPPED') { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
             logToRenderer('WARN', `Job ${jobId}: Could not count source files. Progress will be indeterminate.`);
         }
 
-        if (stopFlags.has(jobId)) {
-            sendUpdate('Stopped', 0, 'Job stopped by user.');
-            return;
-        }
+        if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
 
         const sourcePaths = new Set();
         let processedFiles = 0;
@@ -432,8 +423,15 @@ ipcMain.on('job:start', async (event, jobId) => {
             for (const dirent of dirents) {
                 if (stopFlags.has(jobId)) return;
                 const relativePath = path.join(relativeDir, dirent.name);
-                sourcePaths.add(relativePath);
+                sourcePaths.add(relativePath); // Add all paths for cleanup logic
 
+                const isItemExcluded = job.exclusions && isExcluded(relativePath, job.exclusions);
+
+                if (isItemExcluded) {
+                    if (dirent.isDirectory()) await syncDirectory(relativePath); // Must recurse to populate sourcePaths
+                    continue; // Skip all processing for this excluded item
+                }
+                
                 const sourcePath = path.join(job.source, relativePath);
                 const destPath = path.join(job.destination, relativePath);
                 
@@ -448,38 +446,25 @@ ipcMain.on('job:start', async (event, jobId) => {
                     try {
                         const sourceStats = await fs.stat(sourcePath);
                         const destEntry = destIndex[relativePath];
-                        
                         sendUpdate('Copying', progress, `Processing: ${relativePath}`, copyPayload);
 
-                        // Optimization: Skip hashing if file metadata is identical.
-                        if (destEntry && destEntry.size === sourceStats.size && destEntry.mtimeMs === sourceStats.mtimeMs) {
-                            continue;
-                        }
+                        if (destEntry && destEntry.size === sourceStats.size && destEntry.mtimeMs === sourceStats.mtimeMs) continue;
 
-                        // Hashing is required now to determine the next step.
                         const sourceHash = await calculateFileHash(sourcePath, jobId);
-                        if (!sourceHash) continue; // Stopped or error during hashing
+                        if (!sourceHash) continue;
+                        if (destEntry && destEntry.hash === sourceHash) continue;
 
-                        // Skip if content hash is identical (metadata changed, but content didn't).
-                        if (destEntry && destEntry.hash === sourceHash) {
-                            continue;
-                        }
-
-                        // Check if this content exists elsewhere (a move/rename).
                         const movedPath = hashToPathMap[sourceHash];
                         if (movedPath && movedPath !== relativePath) {
                             sendUpdate('Copying', progress, `Moving: ${movedPath} -> ${relativePath}`, copyPayload);
-                            const oldFullPath = path.join(job.destination, movedPath);
-                            await fs.rename(oldFullPath, destPath);
-                            delete destIndex[movedPath]; // Remove old index entry
+                            await fs.rename(path.join(job.destination, movedPath), destPath).catch(() => fs.copyFile(sourcePath, destPath));
+                            delete destIndex[movedPath];
                             logToRenderer('INFO', `Job ${jobId}: Detected move for ${relativePath}`);
                         } else {
-                            // This is a new or truly modified file, so copy it.
                             sendUpdate('Copying', progress, `Copying: ${relativePath}`, copyPayload);
                             await fs.copyFile(sourcePath, destPath);
                         }
 
-                        // Update timestamps and the index with the new hash.
                         await fs.utimes(destPath, new Date(sourceStats.mtimeMs), new Date(sourceStats.mtimeMs));
                         destIndex[relativePath] = { size: sourceStats.size, mtimeMs: sourceStats.mtimeMs, hash: sourceHash };
                         hashToPathMap[sourceHash] = relativePath;
@@ -493,7 +478,7 @@ ipcMain.on('job:start', async (event, jobId) => {
             }
         }
 
-        sendUpdate('Copying', 0, 'Starting backup process...');
+        sendUpdate('Copying', 0, `Starting backup of ${totalSourceFiles.toLocaleString()} file(s)...`);
         await syncDirectory('');
 
         if (stopFlags.has(jobId)) {
@@ -512,11 +497,10 @@ ipcMain.on('job:start', async (event, jobId) => {
         const toDelete = [];
         for (const destPath in destIndex) {
             if (!sourcePaths.has(destPath)) {
-                toDelete.push({ path: destPath, type: 'file' }); // Simplified, assumes files for now
+                toDelete.push({ path: destPath, type: 'file' });
                 delete destIndex[destPath];
             }
         }
-        // A more robust orphan check would need to find empty dirs too, but this is a good start.
         logToRenderer('INFO', `Job ${jobId}: Found ${toDelete.length} orphan items in destination.`);
         
         let finalStatus = copyErrors.length > 0 ? 'DoneWithErrors' : 'Done';
@@ -527,7 +511,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         
         let finalMessage;
         if (settings.autoCleanup && toDelete.length > 0 && copyErrors.length === 0) {
-            sendUpdate(finalStatus, 0, `Auto-cleaning ${toDelete.length} item(s)...`, payload);
+            sendUpdate(finalStatus, 100, `Auto-cleaning ${toDelete.length} item(s)...`, payload);
             const cleanupResult = await performCleanup(job, toDelete, (progress, message) => {
                 sendUpdate('Cleaning', progress, message);
             });
@@ -553,21 +537,23 @@ ipcMain.on('job:start', async (event, jobId) => {
             sendUpdate(finalStatus, 100, finalMessage, payload);
             logToRenderer(finalStatus === 'Done' ? 'SUCCESS' : 'WARN', `Job ${jobId}: ${finalMessage}`);
         }
-        
-        if (saveTimeout) clearTimeout(saveTimeout);
-        // Atomically save the index. Use non-prettified JSON for performance with large file lists.
-        const newIndexData = {
-            destinationPath: job.destination,
-            files: destIndex,
-        };
-        await fs.writeFile(tempIndexFilePath, JSON.stringify(newIndexData));
-        await fs.rename(tempIndexFilePath, indexFilePath);
-        logToRenderer('INFO', `Job ${jobId}: Destination index saved.`);
 
     } catch(err) {
         logToRenderer('ERROR', `A critical error occurred in job ${jobId}: ${err.message}\n${err.stack}`);
         sendUpdate('Error', 0, `A critical error occurred: ${err.message}`);
     } finally {
+        if (saveTimeout) clearTimeout(saveTimeout);
+        if (Object.keys(destIndex).length > 0 && !stopFlags.has(jobId)) {
+            try {
+                const newIndexData = { destinationPath: job.destination, files: destIndex };
+                await fs.writeFile(tempIndexFilePath, JSON.stringify(newIndexData));
+                await fs.rename(tempIndexFilePath, indexFilePath);
+                logToRenderer('INFO', `Job ${jobId}: Destination index saved.`);
+            } catch (e) {
+                logToRenderer('ERROR', `Job ${jobId}: Failed to save destination index on exit: ${e.message}`);
+            }
+        }
+
         runningJobsInMain.delete(jobId);
         stopFlags.delete(jobId);
         if (runningJobsInMain.size === 0 && powerSaveBlockerId) {

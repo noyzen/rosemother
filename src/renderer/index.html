@@ -69,6 +69,36 @@
             <button type="button" class="btn-browse" data-target="dest-path">Browse...</button>
           </div>
         </div>
+        
+        <div class="exclusions-section">
+            <div class="form-group-row">
+                <label for="job-exclusions-enabled" class="setting-label">Exclusion Rules</label>
+                <div class="form-group-control">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="job-exclusions-enabled">
+                        <span class="slider"></span>
+                    </label>
+                    <p class="setting-description">Exclude certain files or folders from this backup job.</p>
+                </div>
+            </div>
+            <div id="exclusions-container" class="hidden">
+                 <div class="form-group">
+                    <label for="job-excluded-paths-input">Excluded Folder/File Names</label>
+                    <div class="tag-input-container" id="job-excluded-paths">
+                        <input type="text" placeholder="e.g., node_modules, .git (press Enter)" />
+                    </div>
+                     <p class="setting-description mini">Matches names anywhere in the path.</p>
+                </div>
+                <div class="form-group">
+                    <label for="job-excluded-extensions-input">Excluded Extensions</label>
+                    <div class="tag-input-container" id="job-excluded-extensions">
+                        <input type="text" placeholder="e.g., .log, .tmp (press Enter)" />
+                    </div>
+                    <p class="setting-description mini">Include the dot (e.g., `.log`).</p>
+                </div>
+            </div>
+        </div>
+
         <div class="modal-actions">
           <button type="button" id="cancel-job-btn" class="btn btn-secondary">Cancel</button>
           <button type="submit" id="save-job-btn" class="btn btn-primary">Save Job</button>

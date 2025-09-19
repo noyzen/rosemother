@@ -17,6 +17,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const jobNameInput = document.getElementById('job-name');
   const sourcePathInput = document.getElementById('source-path');
   const destPathInput = document.getElementById('dest-path');
+  const jobExclusionsEnabledToggle = document.getElementById('job-exclusions-enabled');
+  const exclusionsContainer = document.getElementById('exclusions-container');
+  const excludedPathsContainer = document.getElementById('job-excluded-paths');
+  const excludedExtensionsPathContainer = document.getElementById('job-excluded-extensions');
   
   const confirmModal = document.getElementById('confirm-modal');
   const confirmTitle = document.getElementById('confirm-title');
@@ -308,12 +312,34 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const openJobModal = (job = null) => {
     jobForm.reset();
+    
+    // Reset exclusion UI
+    jobExclusionsEnabledToggle.checked = false;
+    exclusionsContainer.classList.add('hidden');
+    
+    const initTagInput = (container, values = []) => {
+      container.querySelectorAll('.tag').forEach(t => t.remove());
+      values.forEach(val => {
+        const tag = createTag(val);
+        container.insertBefore(tag, container.querySelector('input'));
+      });
+    };
+    initTagInput(excludedPathsContainer);
+    initTagInput(excludedExtensionsPathContainer);
+    
     if (job) {
       modalTitle.textContent = 'Edit Backup Job';
       jobIdInput.value = job.id;
       jobNameInput.value = job.name || '';
       sourcePathInput.value = job.source;
       destPathInput.value = job.destination;
+      
+      if (job.exclusions && job.exclusions.enabled) {
+        jobExclusionsEnabledToggle.checked = true;
+        exclusionsContainer.classList.remove('hidden');
+        initTagInput(excludedPathsContainer, job.exclusions.paths);
+        initTagInput(excludedExtensionsPathContainer, job.exclusions.extensions);
+      }
     } else {
       modalTitle.textContent = 'New Backup Job';
       jobIdInput.value = '';
@@ -440,7 +466,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const newJobData = {
       name: jobNameInput.value.trim(),
       source: sourcePathInput.value,
-      destination: destPathInput.value
+      destination: destPathInput.value,
+      exclusions: {
+        enabled: jobExclusionsEnabledToggle.checked,
+        paths: Array.from(excludedPathsContainer.querySelectorAll('.tag')).map(t => t.firstChild.textContent),
+        extensions: Array.from(excludedExtensionsPathContainer.querySelectorAll('.tag')).map(t => t.firstChild.textContent),
+      }
     };
 
     if (!newJobData.name) {
@@ -456,7 +487,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (id) { // Editing
       const index = jobs.findIndex(job => job.id === id);
       jobs[index] = { ...jobs[index], ...newJobData };
-      delete jobs[index].autoCleanup;
       addLog('INFO', `Job "${newJobData.name}" has been edited.`);
     } else { // Adding
       const newId = `job_${Date.now()}`;
@@ -465,6 +495,37 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     saveJobs();
     closeJobModal();
+  });
+
+  // --- Exclusion Tag Input Logic ---
+  const createTag = (text) => {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = text;
+    const closeBtn = document.createElement('i');
+    closeBtn.className = 'fa-solid fa-times tag-close';
+    closeBtn.onclick = () => tag.remove();
+    tag.appendChild(closeBtn);
+    return tag;
+  };
+  
+  [excludedPathsContainer, excludedExtensionsPathContainer].forEach(container => {
+    const input = container.querySelector('input');
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        const value = input.value.trim();
+        if (value) {
+          const tag = createTag(value);
+          container.insertBefore(tag, input);
+          input.value = '';
+        }
+      }
+    });
+  });
+
+  jobExclusionsEnabledToggle.addEventListener('change', (e) => {
+    exclusionsContainer.classList.toggle('hidden', !e.target.checked);
   });
 
   // --- Drag and Drop Logic ---
@@ -476,7 +537,6 @@ document.addEventListener('DOMContentLoaded', () => {
         draggedId = target.dataset.id;
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/plain', draggedId);
-        // Delay adding class to allow browser to capture drag image
         setTimeout(() => {
             target.classList.add('dragging');
         }, 0);
@@ -712,7 +772,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const exportData = {
         version: '1.0.0',
         rosemother_export: true,
-        jobs: jobs.map(({ name, source, destination }) => ({ name, source, destination })),
+        jobs: jobs.map(({ name, source, destination, exclusions }) => ({ name, source, destination, exclusions })),
     };
     const { success, error } = await window.electronAPI.saveJsonDialog(JSON.stringify(exportData, null, 2));
     if (!success && error !== 'Save dialog canceled.') {
@@ -748,7 +808,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         id: `job_${Date.now()}_${importedCount}`,
                         name: importedJob.name || `Imported Job ${importedCount + 1}`,
                         source: importedJob.source,
-                        destination: importedJob.destination
+                        destination: importedJob.destination,
+                        exclusions: importedJob.exclusions || { enabled: false, paths: [], extensions: [] }
                     });
                     importedCount++;
                 }
