@@ -4,8 +4,6 @@ const { app, BrowserWindow, Menu, ipcMain, dialog, powerSaveBlocker } = require(
 const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs/promises');
-const { createHash } = require('crypto');
-const { createReadStream } = require('fs');
 const WindowState = require('electron-window-state');
 const Store = require('electron-store');
 
@@ -164,23 +162,6 @@ ipcMain.handle('settings:set', (event, settings) => {
     }
     store.set('settings', settings);
 });
-
-async function calculateFileHash(filePath, jobId) {
-    return new Promise((resolve, reject) => {
-        const hash = createHash('sha256');
-        const stream = createReadStream(filePath);
-        stream.on('data', (chunk) => {
-            if (stopFlags.has(jobId)) {
-                stream.destroy();
-                resolve(null); // Stopped
-                return;
-            }
-            hash.update(chunk);
-        });
-        stream.on('end', () => resolve(hash.digest('hex')));
-        stream.on('error', reject);
-    });
-}
 
 function isExcluded(relativePath, jobExclusions) {
     if (!jobExclusions || !jobExclusions.enabled) return false;
@@ -414,14 +395,12 @@ ipcMain.on('job:start', async (event, jobId) => {
                     } else if (dirent.isFile()) {
                         scannedFileCount++;
                         const progress = totalFileCount > 0 ? Math.min((scannedFileCount / totalFileCount) * 100, 100) : -1;
-                        const message = totalFileCount > 0 ? `Hashing: ${scannedFileCount.toLocaleString()} of ${totalFileCount.toLocaleString()}` : `Hashing destination: ${scannedFileCount.toLocaleString()} files...`;
+                        const message = totalFileCount > 0 ? `Scanning: ${scannedFileCount.toLocaleString()} of ${totalFileCount.toLocaleString()}` : `Scanning destination: ${scannedFileCount.toLocaleString()} files...`;
                         sendUpdate('Scanning', progress, message);
 
                         try {
                             const stats = await fs.stat(fullPath);
-                            const hash = await calculateFileHash(fullPath, jobId);
-                            if (!hash) continue; // Hashing was stopped
-                            destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs, hash: hash };
+                            destIndex[relativePath] = { size: stats.size, mtimeMs: stats.mtimeMs };
                             scheduleSave();
                         } catch (err) { logToRenderer('WARN', `Job ${jobId}: Could not scan ${relativePath}: ${err.message}`); }
                     }
@@ -430,11 +409,6 @@ ipcMain.on('job:start', async (event, jobId) => {
             await buildIndex('');
             if (stopFlags.has(jobId)) { sendUpdate('Stopped', 0, 'Job stopped by user.'); return; }
         }
-        
-        const hashToPathMap = Object.entries(destIndex).reduce((acc, [path, meta]) => {
-            if (meta.hash) acc[meta.hash] = path;
-            return acc;
-        }, {});
 
         sendUpdate('Scanning', -1, 'Counting source files...');
         let totalSourceFiles = 0;
@@ -486,51 +460,33 @@ ipcMain.on('job:start', async (event, jobId) => {
                     const copyPayload = { processedFiles, totalSourceFiles };
                     
                     try {
-                        sendUpdate('Copying', progress, `Processing: ${relativePath}`, copyPayload);
+                        sendUpdate('Copying', progress, `Checking: ${relativePath}`, copyPayload);
                         const sourceStats = await fs.stat(sourcePath);
                         const destEntry = destIndex[relativePath];
 
-                        if (destEntry && destEntry.size === sourceStats.size && destEntry.mtimeMs === sourceStats.mtimeMs) {
-                            continue;
-                        }
-
-                        const sourceHash = await calculateFileHash(sourcePath, jobId);
-                        if (!sourceHash) continue;
-
-                        if (destEntry && destEntry.hash === sourceHash) {
-                            logToRenderer('INFO', `Job ${jobId}: Updating metadata for identical file ${relativePath}`);
-                            await fs.utimes(destPath, new Date(sourceStats.mtimeMs), new Date(sourceStats.mtimeMs));
-                            destIndex[relativePath].mtimeMs = sourceStats.mtimeMs;
-                            destIndex[relativePath].size = sourceStats.size;
-                            scheduleSave();
-                            continue;
-                        }
-
-                        await fs.mkdir(path.dirname(destPath), { recursive: true });
-
-                        const movedPath = hashToPathMap[sourceHash];
-                        if (movedPath && movedPath !== relativePath) {
-                            sendUpdate('Copying', progress, `Moving: ${movedPath} -> ${relativePath}`, copyPayload);
-                            const oldFullPath = path.join(job.destination, movedPath);
-                            try {
-                                await fs.rename(oldFullPath, destPath);
-                            } catch (err) {
-                                logToRenderer('WARN', `Job ${jobId}: Rename failed (likely cross-device). Falling back to copy+delete for ${movedPath}. Error: ${err.message}`);
-                                await fs.copyFile(sourcePath, destPath);
-                                await fs.rm(oldFullPath, { force: true });
-                            }
-                            delete destIndex[movedPath];
-                            logToRenderer('INFO', `Job ${jobId}: Detected move for ${relativePath}`);
+                        let needsCopy = false;
+                        if (!destEntry) {
+                            needsCopy = true;
                         } else {
+                            const sizeChanged = destEntry.size !== sourceStats.size;
+                            // Allow 2-second tolerance for modification time differences across filesystems (e.g. FAT)
+                            const mtimeChanged = Math.abs(destEntry.mtimeMs - sourceStats.mtimeMs) > 2000;
+                            if (sizeChanged || mtimeChanged) {
+                                needsCopy = true;
+                            }
+                        }
+
+                        if (needsCopy) {
                             const action = destEntry ? 'Updating' : 'Copying';
                             sendUpdate('Copying', progress, `${action}: ${relativePath}`, copyPayload);
+                            
+                            await fs.mkdir(path.dirname(destPath), { recursive: true });
                             await fs.copyFile(sourcePath, destPath);
+                            await fs.utimes(destPath, new Date(sourceStats.mtimeMs), new Date(sourceStats.mtimeMs));
+                            
+                            destIndex[relativePath] = { size: sourceStats.size, mtimeMs: sourceStats.mtimeMs };
+                            scheduleSave();
                         }
-
-                        await fs.utimes(destPath, new Date(sourceStats.mtimeMs), new Date(sourceStats.mtimeMs));
-                        destIndex[relativePath] = { size: sourceStats.size, mtimeMs: sourceStats.mtimeMs, hash: sourceHash };
-                        hashToPathMap[sourceHash] = relativePath;
-                        scheduleSave();
                     } catch (error) {
                         const errorMessage = `Failed to process: ${relativePath}. ${error.message}`;
                         copyErrors.push({ path: relativePath, error: error.message });
