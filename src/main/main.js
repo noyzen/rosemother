@@ -78,22 +78,24 @@ ipcMain.handle('jobs:get', () => store.get('jobs', []));
 ipcMain.handle('jobs:set', (event, jobs) => store.set('jobs', jobs));
 
 // Backup Logic
-async function getFiles(dir) {
-    const files = new Map();
+async function getFileSystemEntries(dir) {
+    const entries = new Map();
     try {
         const dirents = await fs.readdir(dir, { withFileTypes: true, recursive: true });
         for (const dirent of dirents) {
+            const fullPath = path.join(dirent.path, dirent.name);
+            const relativePath = path.relative(dir, fullPath);
             if (dirent.isFile()) {
-                const fullPath = path.join(dirent.path, dirent.name);
-                const relativePath = path.relative(dir, fullPath);
                 const stats = await fs.stat(fullPath);
-                files.set(relativePath, { size: stats.size, mtime: stats.mtimeMs });
+                entries.set(relativePath, { type: 'file', size: stats.size, mtime: stats.mtimeMs });
+            } else if (dirent.isDirectory()) {
+                entries.set(relativePath, { type: 'dir' });
             }
         }
     } catch (error) {
         if (error.code !== 'ENOENT') console.error(`Error reading directory ${dir}:`, error);
     }
-    return files;
+    return entries;
 }
 
 ipcMain.on('job:start', async (event, jobId) => {
@@ -114,15 +116,41 @@ ipcMain.on('job:start', async (event, jobId) => {
     }
 
     sendUpdate('Scanning', 0, 'Scanning source and destination folders...');
-    const [sourceFiles, destFiles] = await Promise.all([getFiles(job.source), getFiles(job.destination)]);
+    const [sourceEntries, destEntries] = await Promise.all([getFileSystemEntries(job.source), getFileSystemEntries(job.destination)]);
 
+    // Create missing directories
+    sendUpdate('Copying', 0, 'Creating directory structure...');
+    const toCreateDirs = [];
+    for (const [relativePath, sourceEntry] of sourceEntries.entries()) {
+        if (sourceEntry.type === 'dir' && !destEntries.has(relativePath)) {
+            toCreateDirs.push(relativePath);
+        }
+    }
+
+    // Sort by path depth to ensure parent directories are created first
+    toCreateDirs.sort((a, b) => a.split(path.sep).length - b.split(path.sep).length);
+
+    for (const relativePath of toCreateDirs) {
+        const destPath = path.join(job.destination, relativePath);
+        try {
+            await fs.mkdir(destPath, { recursive: true });
+        } catch (error) {
+            sendUpdate('Error', 0, `Failed to create directory: ${relativePath}. ${error.message}`);
+            return;
+        }
+    }
+
+
+    // Identify files to copy
     const toCopy = [];
     let totalCopySize = 0;
-    for (const [relativePath, sourceStat] of sourceFiles.entries()) {
-        const destStat = destFiles.get(relativePath);
-        if (!destStat || destStat.size !== sourceStat.size || destStat.mtime !== sourceStat.mtime) {
-            toCopy.push(relativePath);
-            totalCopySize += sourceStat.size;
+    for (const [relativePath, sourceEntry] of sourceEntries.entries()) {
+        if (sourceEntry.type === 'file') {
+            const destEntry = destEntries.get(relativePath);
+            if (!destEntry || destEntry.size !== sourceEntry.size || destEntry.mtime !== sourceEntry.mtime) {
+                toCopy.push(relativePath);
+                totalCopySize += sourceEntry.size;
+            }
         }
     }
 
@@ -141,7 +169,7 @@ ipcMain.on('job:start', async (event, jobId) => {
         try {
             await fs.mkdir(path.dirname(destPath), { recursive: true });
             await fs.copyFile(sourcePath, destPath);
-            const sourceStat = sourceFiles.get(relativePath);
+            const sourceStat = sourceEntries.get(relativePath);
             if (sourceStat) {
                 copiedSize += sourceStat.size;
             }
@@ -153,14 +181,14 @@ ipcMain.on('job:start', async (event, jobId) => {
 
     sendUpdate('Syncing', 100, 'Checking for files to delete...');
     const toDelete = [];
-    for (const relativePath of destFiles.keys()) {
-        if (!sourceFiles.has(relativePath)) {
-            toDelete.push(relativePath);
+    for (const [relativePath, destEntry] of destEntries.entries()) {
+        if (!sourceEntries.has(relativePath)) {
+            toDelete.push({ path: relativePath, type: destEntry.type });
         }
     }
 
     if (toDelete.length > 0) {
-        mainWindow.webContents.send('job:request-delete-confirmation', { jobId, files: toDelete });
+        mainWindow.webContents.send('job:request-delete-confirmation', { jobId, files: toDelete.map(item => item.path) });
         const userChoice = await new Promise(resolve => {
             ipcMain.once(`job:confirm-delete-response-${jobId}`, (_event, confirmed) => {
                 resolve({ confirmed });
@@ -168,7 +196,11 @@ ipcMain.on('job:start', async (event, jobId) => {
         });
         
         if (userChoice && userChoice.confirmed) {
-            for (const relativePath of toDelete) {
+            const filesToDelete = toDelete.filter(item => item.type === 'file').map(item => item.path);
+            const dirsToDelete = toDelete.filter(item => item.type === 'dir').map(item => item.path);
+            
+            // Delete files first
+            for (const relativePath of filesToDelete) {
                 const destPath = path.join(job.destination, relativePath);
                 try {
                     await fs.unlink(destPath);
@@ -176,23 +208,16 @@ ipcMain.on('job:start', async (event, jobId) => {
                      console.error(`Failed to delete ${destPath}:`, error);
                 }
             }
-            // Simple empty directory cleanup
-            try {
-                const destDirs = Array.from(destFiles.keys()).map(f => path.dirname(f)).sort((a,b) => b.length - a.length);
-                for(const dir of [...new Set(destDirs)]){
-                    const fullDirPath = path.join(job.destination, dir);
-                    try {
-                        const filesInDir = await fs.readdir(fullDirPath);
-                        if(filesInDir.length === 0){
-                            await fs.rmdir(fullDirPath);
-                        }
-                    } catch (readErr) {
-                        // Ignore if directory doesn't exist anymore
-                        if (readErr.code !== 'ENOENT') console.error("Could not read directory for pruning", readErr);
-                    }
+
+            // Delete directories, longest path first to ensure they are empty
+            dirsToDelete.sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
+            for (const relativePath of dirsToDelete) {
+                const destPath = path.join(job.destination, relativePath);
+                try {
+                    await fs.rmdir(destPath);
+                } catch (error) {
+                     console.error(`Failed to delete directory ${destPath}:`, error);
                 }
-            } catch(e) {
-                console.error("Could not prune empty directories", e);
             }
         }
     }
